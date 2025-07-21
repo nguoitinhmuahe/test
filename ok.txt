@@ -1,9 +1,9 @@
+-- roblox_script.lua (Phiên bản Cuối cùng với Sửa lỗi URL và SSL)
 
--- Bạn có thể chỉnh sửa cá
-_G.UserConfig = _G.UserConfig or {} -- Đảm bảo _G.UserConfig tồn tại, phòng hờ nếu Loader Script không định nghĩa nó
+-- --- Cấu hình Script ---
+_G.UserConfig = _G.UserConfig or {} 
 
--- Thiết lập các giá trị mặc định nếu Loader Script không cung cấp (hoặc nếu bạn đang test trực tiếp file này)
-_G.UserConfig.AppServerIP = _G.UserConfig.AppServerIP or "192.168.1.8" -- <-- ĐỊA CHỈ IP CỦA MÁY CHỦ APP Ở ĐÂY!
+_G.UserConfig.AppServerIP = _G.UserConfig.AppServerIP or "192.168.1.8" 
 _G.UserConfig.AppServerPort = _G.UserConfig.AppServerPort or 5000 
 _G.UserConfig.UpdateInterval = _G.UserConfig.UpdateInterval or 1
 _G.UserConfig.RetryAttempts = _G.UserConfig.RetryAttempts or 3
@@ -23,29 +23,35 @@ local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
--- Sử dụng Config từ _G.UserConfig
+-- Đảm bảo APP_SERVER_URL không có dấu gạch chéo cuối cùng
 local APP_SERVER_URL = "http://" .. _G.UserConfig.AppServerIP .. ":" .. _G.UserConfig.AppServerPort
+if string.sub(APP_SERVER_URL, #APP_SERVER_URL) == "/" then -- Kiểm tra và loại bỏ nếu có
+    APP_SERVER_URL = string.sub(APP_SERVER_URL, 1, #APP_SERVER_URL - 1)
+end
+
 local UPDATE_INTERVAL = _G.UserConfig.UpdateInterval
 local RETRY_ATTEMPTS = _G.UserConfig.RetryAttempts
 local RETRY_DELAY = _G.UserConfig.RetryDelay
 
 local ACCOUNT_NAME = LocalPlayer.Name
 
-local has_connected_to_app_successfully = false -- Biến cờ để theo dõi trạng thái kết nối ban đầu
+local has_connected_to_app_successfully = false 
 
 -- --- Helper Functions ---
 
--- Gửi POST request đến App server
 local function post_to_app(endpoint, data_table)
     local json_data = HttpService:JSONEncode(data_table)
-    local success, response_val = pcall(function() -- response_val là chuỗi nếu thành công, lỗi nếu thất bại
-        return HttpService:PostAsync(APP_SERVER_URL .. endpoint, json_data, Enum.HttpContentType.ApplicationJson)
+    local success, response_val = pcall(function() 
+        return HttpService:PostAsync(APP_SERVER_URL .. endpoint, json_data, Enum.HttpContentType.ApplicationJson, nil, false) -- Tham số SSL là FALSE
     end)
 
     if success then 
-        local decode_success, decoded_data = pcall(HttpService.JSONDecode, HttpService, response_val) -- decoded_data là table hoặc nil/false
+        if type(response_val) ~= "string" then
+            return false, "Phản hồi không phải chuỗi từ App Server: " .. tostring(response_val)
+        end
+        local decode_success, decoded_data = pcall(HttpService.JSONDecode, HttpService, response_val)
         
-        if decode_success and type(decoded_data) == "table" then -- Kiểm tra giải mã thành công và là bảng
+        if decode_success and type(decoded_data) == "table" then 
             if decoded_data.status == "success" then
                 return true, decoded_data.message
             else
@@ -55,12 +61,10 @@ local function post_to_app(endpoint, data_table)
             return false, "Lỗi giải mã JSON từ App hoặc phản hồi trống/không hợp lệ: " .. tostring(response_val)
         end
     else 
-        -- Lỗi kết nối App Server, response_val là thông báo lỗi của Lua (có thể là boolean)
         return false, "Lỗi kết nối App Server: " .. (type(response_val) == "string" and response_val or tostring(response_val))
     end
 end
 
--- Gửi log về App (và không in ra console của Executor nữa)
 local function send_log_to_app(message, level)
     local final_message = (type(message) == "string" and message) or tostring(message)
     post_to_app("/post_trade_status", {
@@ -322,15 +326,24 @@ local function givePet(pet_name, receiver_player_name)
 end
 
 
--- --- Hàm lấy cấu hình từ App (được tách riêng) ---
+-- --- Hàm lấy cấu hình từ App (đã bao gồm DEBUG) ---
 local function get_config_from_app()
+    local account_param = HttpService:UrlEncode(ACCOUNT_NAME)
+    if ACCOUNT_NAME == "" or account_param == "" then
+        log_warning("GET Settings: Tên tài khoản trống, không thể gửi yêu cầu.")
+        return nil
+    end
+
+    local url = APP_SERVER_URL .. "/get_settings?account=" .. account_param -- Xây dựng URL đúng
+
     local success_get, response_body = pcall(function()
-        return HttpService:GetAsync(APP_SERVER_URL .. "/get_settings?account=" .. HttpService:UrlEncode(ACCOUNT_NAME))
+        -- THAY ĐỔI Ở ĐÂY: Tham số SSL là FALSE
+        return HttpService:GetAsync(url, false) 
     end)
-    
-    print("DEBUG: type(success_get) = ", type(success_get), " value = ", tostring(success_get))
-    print("DEBUG: type(response_body) = ", type(response_body), " value = ", tostring(response_body))
-        -- XÓA DÒNG NÀY SAU KHI DEBUG XONG
+
+    print("DEBUG: GET " .. url .. ", success_get=" .. tostring(success_get) .. 
+          ", response_body_type=" .. type(response_body) .. 
+          ", response_body=" .. tostring(response_body))
 
     if success_get then 
         if type(response_body) ~= "string" then
@@ -360,7 +373,7 @@ task.spawn(function()
 
     start_auto_accept_listener() 
 
-    while RunService:IsRunning() do -- Đã sửa lỗi :IsRunning()
+    while RunService:IsRunning() do 
         local config = nil
         local current_connection_success = false
 
