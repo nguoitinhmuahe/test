@@ -1,4 +1,3 @@
--- roblox_script.lua (Phiên bản Cuối cùng & Sửa GET thành POST)
 
 -- --- Cấu hình Script ---
 _G.UserConfig = _G.UserConfig or {} 
@@ -14,7 +13,7 @@ _G.UserConfig.TeleportOffset = _G.UserConfig.TeleportOffset or 5
 
 
 -- --- Khởi tạo các Service và Biến ---
-local HttpService = game:GetService("HttpService")
+local HttpService = game:GetService("HttpService") -- Vẫn giữ HttpService cho JSONEncode/Decode
 local Players = game:GetService("Players")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -36,34 +35,70 @@ local ACCOUNT_NAME = LocalPlayer.Name
 
 local has_connected_to_app_successfully = false 
 
+-- --- BẮT ĐẦU: KHAI BÁO HTTP REQUEST EXECUTOR API ---
+-- Điều này sẽ tìm API HTTP của Executor của bạn
+local http_request_executor = http_request or request or syn and syn.request or fluxus and fluxus.request or (http and http.request)
+if not http_request_executor then
+    -- Nếu không tìm thấy API nào, script không thể hoạt động.
+    -- Sẽ dùng print/warn ở đây vì chưa thể gửi log qua App.
+    warn("[INIT_ERROR] ❌ Executor không hỗ trợ HTTP Request API cần thiết. Script sẽ không hoạt động.")
+    return -- Dừng script nếu không có API HTTP
+end
+-- --- KẾT THÚC: KHAI BÁO HTTP REQUEST EXECUTOR API ---
+
+
 -- --- Helper Functions ---
 
-local function post_to_app(endpoint, data_table)
-    local json_data = HttpService:JSONEncode(data_table)
-    local success, response_val = pcall(function() 
-        return HttpService:PostAsync(APP_SERVER_URL .. endpoint, json_data, Enum.HttpContentType.ApplicationJson, nil, false) -- SSL là FALSE
+-- Hàm thực hiện request HTTP, dùng API của Executor
+-- Trả về (success, response_body_string) hoặc (false, error_message)
+local function perform_http_request(method, url, headers, body)
+    local request_options = {
+        Url = url,
+        Method = method,
+        Headers = headers or {},
+        Body = body -- Body chỉ dùng cho POST/PUT
+    }
+
+    local success, response = pcall(function()
+        return http_request_executor(request_options)
     end)
 
+    if success and type(response) == "table" and response.StatusCode then
+        -- Thành công, trả về Body và Status Code
+        return true, response.Body, response.StatusCode
+    else
+        -- Lỗi thực thi request hoặc phản hồi không hợp lệ
+        return false, tostring(response), nil -- response sẽ là lỗi nếu pcall thất bại
+    end
+end
+
+
+-- Gửi POST request đến App server
+local function post_to_app(endpoint, data_table)
+    local json_data = HttpService:JSONEncode(data_table)
+    local headers = {
+        ["Content-Type"] = "application/json"
+    }
+    local success, response_body, status_code = perform_http_request("POST", APP_SERVER_URL .. endpoint, headers, json_data)
+
     if success then 
-        if type(response_val) ~= "string" then
-            return false, "Phản hồi không phải chuỗi từ App Server: " .. tostring(response_val)
-        end
-        local decode_success, decoded_data = pcall(HttpService.JSONDecode, HttpService, response_val)
+        local decode_success, decoded_data = pcall(HttpService.JSONDecode, HttpService, response_body)
         
         if decode_success and type(decoded_data) == "table" then 
             if decoded_data.status == "success" then
                 return true, decoded_data.message
             else
-                return false, decoded_data.error or ("Phản hồi App có status lỗi: " .. tostring(response_val))
+                return false, decoded_data.error or ("Phản hồi App có status lỗi (" .. status_code .. "): " .. tostring(response_body))
             end
         else
-            return false, "Lỗi giải mã JSON từ App hoặc phản hồi trống/không hợp lệ: " .. tostring(response_val)
+            return false, "Lỗi giải mã JSON từ App hoặc phản hồi trống/không hợp lệ (" .. status_code .. "): " .. tostring(response_body)
         end
     else 
-        return false, "Lỗi kết nối App Server: " .. (type(response_val) == "string" and response_val or tostring(response_val))
+        return false, "Lỗi kết nối App Server: " .. tostring(response_body)
     end
 end
 
+-- Gửi log về App (và không in ra console của Executor nữa)
 local function send_log_to_app(message, level)
     local final_message = (type(message) == "string" and message) or tostring(message)
     post_to_app("/post_trade_status", {
@@ -325,29 +360,35 @@ local function givePet(pet_name, receiver_player_name)
 end
 
 
--- --- Hàm lấy cấu hình từ App (ĐÃ CHUYỂN SANG POST) ---
+-- --- Hàm lấy cấu hình từ App (ĐÃ CHUYỂN SANG DÙNG Executor's Custom HTTP API) ---
 local function get_config_from_app()
     if ACCOUNT_NAME == "" then
-        log_warning("Fetch Config (POST Mock): Tên tài khoản trống, không thể gửi yêu cầu.")
+        log_warning("GET Settings (POST Mock): Tên tài khoản trống, không thể gửi yêu cầu.")
         return nil
     end
 
-    local url = APP_SERVER_URL .. "/fetch_config" -- <-- ĐỔI TÊN ENDPOINT Ở ĐÂY
+    local url = APP_SERVER_URL .. "/fetch_config" -- Đã đổi tên endpoint
     local post_data = {
         account = ACCOUNT_NAME 
     }
 
-    local success_http_post, response_body = pcall(function()
-        return HttpService:PostAsync(url, HttpService:JSONEncode(post_data), Enum.HttpContentType.ApplicationJson, nil, false) 
-    end)
+    local headers = {
+        ["Content-Type"] = "application/json"
+    }
 
+    -- Sử dụng Executor's Custom HTTP API cho POST request
+    local success_http_post, response_body, status_code = perform_http_request("POST", url, headers, HttpService:JSONEncode(post_data))
+
+    -- Dòng DEBUG TRỰC TIẾP trong Executor Console
     print("DEBUG: POST " .. url .. ", success_http_post=" .. tostring(success_http_post) .. 
           ", response_body_type=" .. type(response_body) .. 
-          ", response_body=" .. tostring(response_body))
+          ", response_body=" .. tostring(response_body) ..
+          ", status_code=" .. tostring(status_code))
+    -- XÓA DÒNG NÀY SAU KHI DEBUG XONG VÀ ĐẢM BẢO KẾT NỐI ỔN ĐỊNH
 
     if success_http_post then 
         if type(response_body) ~= "string" then
-            log_warning("Fetch Config (POST Mock): Phản hồi không phải chuỗi từ App: " .. tostring(response_body))
+            log_warning("GET Settings (POST Mock): Phản hồi không phải chuỗi từ App: " .. tostring(response_body))
             return nil
         end
         local decode_success, data = pcall(function()
@@ -356,11 +397,11 @@ local function get_config_from_app()
         if decode_success and type(data) == "table" and data.status == "success" and type(data.config) == "table" then
             return data.config
         else
-            log_warning("Fetch Config (POST Mock): Phản hồi JSON không hợp lệ: " .. tostring(response_body))
+            log_warning("GET Settings (POST Mock): Phản hồi JSON không hợp lệ: " .. tostring(response_body))
             return nil
         end
     else
-        log_warning("Fetch Config (POST Mock): Lỗi HTTP POST: " .. tostring(response_body))
+        log_warning("GET Settings (POST Mock): Lỗi HTTP POST: " .. tostring(response_body) .. " (Status: " .. tostring(status_code) .. ")")
         return nil
     end
 end
