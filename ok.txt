@@ -1,4 +1,4 @@
--- roblox_script.lua (Phiên bản Cuối cùng với Sửa lỗi URL và SSL)
+-- roblox_script.lua (Phiên bản Cuối cùng & Sửa GET thành POST)
 
 -- --- Cấu hình Script ---
 _G.UserConfig = _G.UserConfig or {} 
@@ -23,9 +23,8 @@ local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
--- Đảm bảo APP_SERVER_URL không có dấu gạch chéo cuối cùng
 local APP_SERVER_URL = "http://" .. _G.UserConfig.AppServerIP .. ":" .. _G.UserConfig.AppServerPort
-if string.sub(APP_SERVER_URL, #APP_SERVER_URL) == "/" then -- Kiểm tra và loại bỏ nếu có
+if string.sub(APP_SERVER_URL, #APP_SERVER_URL) == "/" then 
     APP_SERVER_URL = string.sub(APP_SERVER_URL, 1, #APP_SERVER_URL - 1)
 end
 
@@ -42,7 +41,7 @@ local has_connected_to_app_successfully = false
 local function post_to_app(endpoint, data_table)
     local json_data = HttpService:JSONEncode(data_table)
     local success, response_val = pcall(function() 
-        return HttpService:PostAsync(APP_SERVER_URL .. endpoint, json_data, Enum.HttpContentType.ApplicationJson, nil, false) -- Tham số SSL là FALSE
+        return HttpService:PostAsync(APP_SERVER_URL .. endpoint, json_data, Enum.HttpContentType.ApplicationJson, nil, false) -- SSL là FALSE
     end)
 
     if success then 
@@ -326,28 +325,31 @@ local function givePet(pet_name, receiver_player_name)
 end
 
 
--- --- Hàm lấy cấu hình từ App (đã bao gồm DEBUG) ---
+-- --- Hàm lấy cấu hình từ App (ĐÃ CHUYỂN SANG POST) ---
 local function get_config_from_app()
-    local account_param = HttpService:UrlEncode(ACCOUNT_NAME)
-    if ACCOUNT_NAME == "" or account_param == "" then
-        log_warning("GET Settings: Tên tài khoản trống, không thể gửi yêu cầu.")
+    if ACCOUNT_NAME == "" then
+        log_warning("GET Settings (POST Mock): Tên tài khoản trống, không thể gửi yêu cầu.")
         return nil
     end
 
-    local url = APP_SERVER_URL .. "/get_settings?account=" .. account_param -- Xây dựng URL đúng
+    local url = APP_SERVER_URL .. "/get_settings" -- Endpoint không còn query string
+    local post_data = {
+        account = ACCOUNT_NAME -- Tham số tài khoản gửi trong body POST
+    }
 
-    local success_get, response_body = pcall(function()
-        -- THAY ĐỔI Ở ĐÂY: Tham số SSL là FALSE
-        return HttpService:GetAsync(url, false) 
+    local success_http_post, response_body = pcall(function()
+        -- Dùng POST, gửi data trong body, và SSL là FALSE
+        return HttpService:PostAsync(url, HttpService:JSONEncode(post_data), Enum.HttpContentType.ApplicationJson, nil, false) 
     end)
 
-    print("DEBUG: GET " .. url .. ", success_get=" .. tostring(success_get) .. 
+    -- Dòng DEBUG TRỰC TIẾP trong Executor Console
+    print("DEBUG: POST " .. url .. ", success_http_post=" .. tostring(success_http_post) .. 
           ", response_body_type=" .. type(response_body) .. 
           ", response_body=" .. tostring(response_body))
 
-    if success_get then 
+    if success_http_post then 
         if type(response_body) ~= "string" then
-            log_warning("GET Settings: Phản hồi không phải chuỗi từ App: " .. tostring(response_body))
+            log_warning("GET Settings (POST Mock): Phản hồi không phải chuỗi từ App: " .. tostring(response_body))
             return nil
         end
         local decode_success, data = pcall(function()
@@ -356,14 +358,13 @@ local function get_config_from_app()
         if decode_success and type(data) == "table" and data.status == "success" and type(data.config) == "table" then
             return data.config
         else
-            log_warning("GET Settings: Phản hồi JSON không hợp lệ: " .. tostring(response_body))
+            log_warning("GET Settings (POST Mock): Phản hồi JSON không hợp lệ: " .. tostring(response_body))
             return nil
         end
     else
-        log_warning("GET Settings: Lỗi kết nối HTTP: " .. tostring(response_body))
+        log_warning("GET Settings (POST Mock): Lỗi HTTP POST: " .. tostring(response_body))
         return nil
     end
-    return nil
 end
 
 -- --- Vòng lặp chính của Script ---
