@@ -328,28 +328,26 @@ end
 -- --- Hàm lấy cấu hình từ App (ĐÃ CHUYỂN SANG POST) ---
 local function get_config_from_app()
     if ACCOUNT_NAME == "" then
-        log_warning("GET Settings (POST Mock): Tên tài khoản trống, không thể gửi yêu cầu.")
+        log_warning("Fetch Config (POST Mock): Tên tài khoản trống, không thể gửi yêu cầu.")
         return nil
     end
 
-    local url = APP_SERVER_URL .. "/get_settings" -- Endpoint không còn query string
+    local url = APP_SERVER_URL .. "/fetch_config" -- <-- ĐỔI TÊN ENDPOINT Ở ĐÂY
     local post_data = {
-        account = ACCOUNT_NAME -- Tham số tài khoản gửi trong body POST
+        account = ACCOUNT_NAME 
     }
 
     local success_http_post, response_body = pcall(function()
-        -- Dùng POST, gửi data trong body, và SSL là FALSE
         return HttpService:PostAsync(url, HttpService:JSONEncode(post_data), Enum.HttpContentType.ApplicationJson, nil, false) 
     end)
 
-    -- Dòng DEBUG TRỰC TIẾP trong Executor Console
     print("DEBUG: POST " .. url .. ", success_http_post=" .. tostring(success_http_post) .. 
           ", response_body_type=" .. type(response_body) .. 
           ", response_body=" .. tostring(response_body))
 
     if success_http_post then 
         if type(response_body) ~= "string" then
-            log_warning("GET Settings (POST Mock): Phản hồi không phải chuỗi từ App: " .. tostring(response_body))
+            log_warning("Fetch Config (POST Mock): Phản hồi không phải chuỗi từ App: " .. tostring(response_body))
             return nil
         end
         local decode_success, data = pcall(function()
@@ -358,11 +356,11 @@ local function get_config_from_app()
         if decode_success and type(data) == "table" and data.status == "success" and type(data.config) == "table" then
             return data.config
         else
-            log_warning("GET Settings (POST Mock): Phản hồi JSON không hợp lệ: " .. tostring(response_body))
+            log_warning("Fetch Config (POST Mock): Phản hồi JSON không hợp lệ: " .. tostring(response_body))
             return nil
         end
     else
-        log_warning("GET Settings (POST Mock): Lỗi HTTP POST: " .. tostring(response_body))
+        log_warning("Fetch Config (POST Mock): Lỗi HTTP POST: " .. tostring(response_body))
         return nil
     end
 end
