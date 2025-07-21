@@ -40,24 +40,25 @@ local has_connected_to_app_successfully = false -- Biến cờ để theo dõi t
 -- Gửi POST request đến App server
 local function post_to_app(endpoint, data_table)
     local json_data = HttpService:JSONEncode(data_table)
-    local success, response_text = pcall(function() -- response_text là chuỗi nếu thành công, lỗi nếu thất bại
+    local success, response_result = pcall(function() -- response_result là chuỗi nếu thành công, lỗi nếu thất bại
         return HttpService:PostAsync(APP_SERVER_URL .. endpoint, json_data, Enum.HttpContentType.ApplicationJson)
     end)
 
     if success then 
-        local decode_success, decoded_data = pcall(HttpService.JSONDecode, HttpService, response_text) -- decoded_data là table hoặc nil/false
+        local decode_success, decoded_data = pcall(HttpService.JSONDecode, HttpService, response_result) -- decoded_data là table hoặc nil/false
         
         if decode_success and type(decoded_data) == "table" then -- Kiểm tra giải mã thành công và là bảng
             if decoded_data.status == "success" then
                 return true, decoded_data.message
             else
-                return false, decoded_data.error or "Phản hồi App có status lỗi: " .. tostring(response_text)
+                return false, decoded_data.error or ("Phản hồi App có status lỗi: " .. tostring(response_result))
             end
         else
-            return false, "Lỗi giải mã JSON từ App hoặc phản hồi trống/không hợp lệ: " .. tostring(response_text)
+            return false, "Lỗi giải mã JSON từ App hoặc phản hồi trống/không hợp lệ: " .. tostring(response_result)
         end
     else 
-        return false, "Lỗi kết nối App Server: " .. tostring(response_text) -- Sử dụng tostring để đảm bảo là chuỗi lỗi
+        -- Đảm bảo đây luôn là một chuỗi có nghĩa
+        return false, "Lỗi kết nối App Server: " .. (type(response_result) == "string" and response_result or tostring(response_result))
     end
 end
 
@@ -339,7 +340,7 @@ task.spawn(function()
                 return HttpService:GetAsync(APP_SERVER_URL .. "/get_settings?account=" .. HttpService:UrlEncode(ACCOUNT_NAME), true)
             end)
 
-            if success_get and response_body then
+            if success_get then -- Thành công lấy phản hồi từ server
                 local decode_success, data = pcall(function()
                     return HttpService:JSONDecode(response_body)
                 end)
@@ -351,14 +352,25 @@ task.spawn(function()
                     update_status_text("Online", Color3.new(0, 1, 0)) 
                     break 
                 else
-                    local error_msg = "Phản hồi không hợp lệ từ App: " .. tostring(response_body)
+                    -- Lỗi: Phản hồi không phải JSON hợp lệ hoặc status không phải success
+                    local error_msg = "Phản hồi không hợp lệ từ App."
                     if type(data) == "table" and data.error then
-                        error_msg = data.error 
+                        error_msg = data.error
+                    elseif type(response_body) == "string" then
+                        error_msg = "Phản hồi không phải JSON hợp lệ: " .. response_body
+                    else
+                        error_msg = "Phản hồi không mong đợi: " .. tostring(response_body) -- Fallback an toàn
                     end
                     log_warning(string.format("App phản hồi lỗi/dữ liệu không hợp lệ (thử %d/%d): %s", attempt, attempts_to_try, error_msg))
                 end
-            else
-                log_warning(string.format("Lỗi kết nối tới App (thử %d/%d): %s", attempt, attempts_to_try, tostring(response_body)))
+            else -- Lỗi: Không thể kết nối với server (HTTP request thất bại)
+                local connection_error_msg = "Không rõ lỗi kết nối."
+                if type(response_body) == "string" then -- response_body sẽ là chuỗi lỗi nếu pcall thất bại
+                    connection_error_msg = response_body
+                else
+                    connection_error_msg = tostring(response_body) -- tostring(false) nếu lỗi cực kỳ thấp cấp
+                end
+                log_warning(string.format("Lỗi kết nối tới App (thử %d/%d): %s", attempt, attempts_to_try, connection_error_msg))
             end
             task.wait(RETRY_DELAY) 
         end
@@ -418,3 +430,4 @@ task.spawn(function()
     log_info("Script đã dừng vì game không còn chạy.")
     update_status_text("OFFLINE (Game Closed)", Color3.new(1, 0, 0))
 end)
+print("done")
