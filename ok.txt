@@ -1,4 +1,3 @@
--- roblox_script.lua (Phiên bản Cuối cùng với Sửa lỗi JSON và IP cấu hình)
 
 -- --- Cấu hình Script ---
 -- Bạn có thể chỉnh sửa các giá trị này trực tiếp trong Loader Script
@@ -40,34 +39,38 @@ local has_connected_to_app_successfully = false -- Biến cờ để theo dõi t
 -- Gửi POST request đến App server
 local function post_to_app(endpoint, data_table)
     local json_data = HttpService:JSONEncode(data_table)
-    local success, response_result = pcall(function() -- response_result là chuỗi nếu thành công, lỗi nếu thất bại
+    local success, response_val = pcall(function() -- response_val là chuỗi nếu thành công, lỗi nếu thất bại
         return HttpService:PostAsync(APP_SERVER_URL .. endpoint, json_data, Enum.HttpContentType.ApplicationJson)
     end)
 
     if success then 
-        local decode_success, decoded_data = pcall(HttpService.JSONDecode, HttpService, response_result) -- decoded_data là table hoặc nil/false
+        local decode_success, decoded_data = pcall(HttpService.JSONDecode, HttpService, response_val) -- decoded_data là table hoặc nil/false
         
         if decode_success and type(decoded_data) == "table" then -- Kiểm tra giải mã thành công và là bảng
             if decoded_data.status == "success" then
                 return true, decoded_data.message
             else
-                return false, decoded_data.error or ("Phản hồi App có status lỗi: " .. tostring(response_result))
+                -- decoded_data là table, an toàn để index
+                return false, decoded_data.error or ("Phản hồi App có status lỗi: " .. tostring(response_val))
             end
         else
-            return false, "Lỗi giải mã JSON từ App hoặc phản hồi trống/không hợp lệ: " .. tostring(response_result)
+            -- Lỗi giải mã JSON hoặc phản hồi trống/không hợp lệ
+            return false, "Lỗi giải mã JSON từ App hoặc phản hồi trống/không hợp lệ: " .. tostring(response_val)
         end
     else 
-        -- Đảm bảo đây luôn là một chuỗi có nghĩa
-        return false, "Lỗi kết nối App Server: " .. (type(response_result) == "string" and response_result or tostring(response_result))
+        -- Lỗi kết nối App Server, response_val là thông báo lỗi của Lua (có thể là boolean)
+        return false, "Lỗi kết nối App Server: " .. (type(response_val) == "string" and response_val or tostring(response_val))
     end
 end
 
 -- Gửi log về App (và không in ra console của Executor nữa)
 local function send_log_to_app(message, level)
+    -- Đảm bảo message là chuỗi trước khi gửi
+    local final_message = (type(message) == "string" and message) or tostring(message)
     post_to_app("/post_trade_status", {
         account_name = ACCOUNT_NAME,
         status = level,
-        message = message
+        message = final_message
     })
 end
 
@@ -329,7 +332,8 @@ task.spawn(function()
 
     start_auto_accept_listener() 
 
-    while RunService.IsRunning() do
+    -- SỬA LỖI: Dùng : cho IsRunning()
+    while RunService:IsRunning() do 
         local config = nil
         local current_connection_success = false
 
@@ -430,4 +434,3 @@ task.spawn(function()
     log_info("Script đã dừng vì game không còn chạy.")
     update_status_text("OFFLINE (Game Closed)", Color3.new(1, 0, 0))
 end)
-print("done")
