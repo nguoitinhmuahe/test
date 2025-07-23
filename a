@@ -1,3 +1,4 @@
+-- ok
 _G.UserConfig = {
     AppServerIP = "14.226.80.56",
     AppServerPort = 5000,
@@ -401,7 +402,6 @@ local function join_server_by_job_id(job_id)
         task.wait(math.random(_G.UserConfig.TeleportRetryDelayMin, _G.UserConfig.TeleportRetryDelayMax))
     end
     log_error("Join Server: Hết số lần thử teleport với Job ID: " .. job_id .. ".")
-    update_status_text("Teleport Failed! Join server manually with Job ID: " .. job_id, Color3.new(1, 0, 0))
     return false, "Max Retries Exceeded"
 end
 
@@ -413,20 +413,37 @@ local function join_new_server()
         log_info("Join New Server: Đang trong thời gian cooldown, bỏ qua teleport (thời gian còn lại: " .. remaining .. " giây).")
         return false, "Teleport Cooldown"
     end
-    log_info("Join New Server: Thử teleport vào server public mới (placeId: " .. _G.UserConfig.DefaultPlaceId .. ").")
-    local success, error_msg = pcall(function()
-        TeleportService:TeleportAsync(tonumber(_G.UserConfig.DefaultPlaceId), {LocalPlayer})
-    end)
-    if success then
-        last_teleport_time = current_time
-        log_info("Join New Server: Đã gửi yêu cầu teleport vào server public mới.")
-        return true, nil
-    else
-        local detailed_error = tostring(error_msg)
-        log_error("Join New Server: Lỗi khi teleport: " .. detailed_error)
-        update_status_text("Teleport Failed! Join new server manually.", Color3.new(1, 0, 0))
-        return false, "Teleport Failed: " .. detailed_error
+    for attempt = 1, _G.UserConfig.MaxTeleportRetries do
+        log_info(string.format("Join New Server: Thử teleport lần %d/%d vào server public mới (placeId: %s).", 
+            attempt, _G.UserConfig.MaxTeleportRetries, _G.UserConfig.DefaultPlaceId))
+        local success, error_msg = pcall(function()
+            TeleportService:TeleportAsync(tonumber(_G.UserConfig.DefaultPlaceId), {LocalPlayer})
+        end)
+        if success then
+            last_teleport_time = current_time
+            log_info("Join New Server: Đã gửi yêu cầu teleport vào server public mới.")
+            return true, nil
+        else
+            local detailed_error = tostring(error_msg)
+            log_error(string.format("Join New Server: Lỗi khi teleport (lần %d): %s", attempt, detailed_error))
+            -- Fallback dùng TeleportToPlaceInstance
+            log_info("Join New Server: Thử fallback TeleportToPlaceInstance (lần " .. attempt .. ").")
+            local fallback_success, fallback_error = pcall(function()
+                TeleportService:TeleportToPlaceInstance(tonumber(_G.UserConfig.DefaultPlaceId), game.JobId, LocalPlayer)
+            end)
+            if fallback_success then
+                last_teleport_time = current_time
+                log_info("Join New Server: Đã gửi yêu cầu teleport fallback thành công.")
+                return true, nil
+            else
+                log_error("Join New Server: Fallback thất bại: " .. tostring(fallback_error))
+            end
+        end
+        task.wait(math.random(_G.UserConfig.TeleportRetryDelayMin, _G.UserConfig.TeleportRetryDelayMax))
     end
+    log_error("Join New Server: Hết số lần thử teleport vào server mới.")
+    update_status_text("Teleport Failed! Join new server manually.", Color3.new(1, 0, 0))
+    return false, "Max Retries Exceeded"
 end
 
 -- Get Config from Server
@@ -445,7 +462,9 @@ local function get_config_from_app()
         end
         local decode_success, data = pcall(HttpService.JSONDecode, HttpService, response_body)
         if decode_success and type(data) == "table" and data.status == "success" and type(data.config) == "table" then
-            log_debug("GET Settings: Nhận cấu hình - operation_mode: " .. tostring(data.config.operation_mode) .. ", job_id_to_join: " .. tostring(data.config.job_id_to_join) .. ", sender_job_id: " .. tostring(data.config.sender_job_id))
+            log_debug("GET Settings: Nhận cấu hình - operation_mode: " .. tostring(data.config.operation_mode) .. 
+                      ", job_id_to_join: " .. tostring(data.config.job_id_to_join) .. 
+                      ", sender_job_id: " .. tostring(data.config.sender_job_id))
             return data.config
         else
             log_warning("GET Settings: Phản hồi JSON không hợp lệ: " .. tostring(response_body))
@@ -494,7 +513,6 @@ task.spawn(function()
                 if config.operation_mode == "receive_pet" then
                     log_info("Chế độ: Nhận Pet. Đang chờ giao dịch.")
                     send_job_id()
-                    -- Thử join server của tài khoản gửi nếu có
                     if config.sender_job_id and config.sender_job_id ~= "" then
                         log_info("Nhận Job ID của tài khoản gửi: " .. config.sender_job_id)
                         local success, error_reason = join_server_by_job_id(config.sender_job_id)
@@ -504,14 +522,22 @@ task.spawn(function()
                         else
                             log_error("Join Server: Tài khoản chứa không thể teleport đến tài khoản gửi: " .. error_reason)
                             update_status_text("Teleport Failed! Join server manually with Job ID: " .. config.sender_job_id, Color3.new(1, 0, 0))
-                            -- Thử vào server mới
                             local new_server_success, new_server_error = join_new_server()
                             if new_server_success then
                                 log_info("Join New Server: Tài khoản chứa đã teleport vào server public mới.")
-                                send_job_id() -- Gửi Job ID mới
+                                send_job_id()
                             else
                                 log_error("Join New Server: Thất bại: " .. new_server_error)
                             end
+                        end
+                    else
+                        log_info("Không có sender_job_id, thử vào server mới.")
+                        local new_server_success, new_server_error = join_new_server()
+                        if new_server_success then
+                            log_info("Join New Server: Tài khoản chứa đã teleport vào server public mới.")
+                            send_job_id()
+                        else
+                            log_error("Join New Server: Thất bại: " .. new_server_error)
                         end
                     end
                 elseif config.operation_mode == "trade_pet" then
@@ -528,23 +554,21 @@ task.spawn(function()
                             else
                                 log_error("Join Server: Thất bại, lý do: " .. error_reason)
                                 update_status_text("Teleport Failed! Join server manually with Job ID: " .. config.job_id_to_join, Color3.new(1, 0, 0))
-                                send_job_id() -- Gửi Job ID để tài khoản chứa thử join
-                                -- Thử vào server mới
+                                send_job_id()
                                 local new_server_success, new_server_error = join_new_server()
                                 if new_server_success then
                                     log_info("Join New Server: Tài khoản gửi đã teleport vào server public mới.")
-                                    send_job_id() -- Gửi Job ID mới
+                                    send_job_id()
                                 else
                                     log_error("Join New Server: Thất bại: " .. new_server_error)
                                 end
                             end
                         else
                             log_warning("Không có Job ID để join server của tài khoản chứa.")
-                            -- Thử vào server mới
                             local new_server_success, new_server_error = join_new_server()
                             if new_server_success then
                                 log_info("Join New Server: Tài khoản gửi đã teleport vào server public mới.")
-                                send_job_id() -- Gửi Job ID mới
+                                send_job_id()
                             else
                                 log_error("Join New Server: Thất bại: " .. new_server_error)
                             end
