@@ -1,3 +1,4 @@
+-- ok
 _G.UserConfig = {
     AppServerIP = "14.226.80.56",
     AppServerPort = 5000,
@@ -88,7 +89,7 @@ local function send_log_to_app(message, level)
     }
     local json_data = HttpService:JSONEncode(data)
     local headers = { ["Content-Type"] = "application/json" }
-    local success, response_body, status_code = http_request_executor({
+    local success, response = pcall(http_request_executor, {
         Url = APP_SERVER_URL .. "/post_trade_status",
         Method = "POST",
         Headers = headers,
@@ -362,13 +363,13 @@ end
 local function join_server_by_job_id(job_id)
     if not job_id or job_id == "" then
         log_error("Join Server: Job ID trống hoặc không hợp lệ.")
-        return false
+        return false, "Invalid Job ID"
     end
     local current_time = tick()
     if current_time - last_teleport_time < TELEPORT_COOLDOWN then
-        log_info("Join Server: Đang trong thời gian cooldown, bỏ qua teleport (thời gian còn lại: " .. 
-                 string.format("%.1f", TELEPORT_COOLDOWN - (current_time - last_teleport_time)) .. " giây).")
-        return false
+        local remaining = string.format("%.1f", TELEPORT_COOLDOWN - (current_time - last_teleport_time))
+        log_info("Join Server: Đang trong thời gian cooldown, bỏ qua teleport (thời gian còn lại: " .. remaining .. " giây).")
+        return false, "Teleport Cooldown"
     end
     log_info("Join Server: Thử teleport đến server với Job ID: " .. job_id .. " (placeId: " .. _G.UserConfig.DefaultPlaceId .. ").")
     local teleportOptions = Instance.new("TeleportOptions")
@@ -379,11 +380,19 @@ local function join_server_by_job_id(job_id)
     if success then
         last_teleport_time = current_time
         log_info("Join Server: Đã gửi yêu cầu teleport đến server với Job ID: " .. job_id .. ".")
-        return true
+        return true, nil
     else
-        log_error("Join Server: Lỗi khi teleport: " .. tostring(error_msg))
-        update_status_text("Teleport Failed! Join server manually with Job ID: " .. job_id, Color3.new(1, 0, 0))
-        return false
+        local detailed_error = tostring(error_msg)
+        if detailed_error:find("Server is full") then
+            log_error("Join Server: Server đầy (Job ID: " .. job_id .. ").")
+            return false, "Server Full"
+        elseif detailed_error:find("Invalid server instance") then
+            log_error("Join Server: Job ID không hợp lệ: " .. job_id .. ".")
+            return false, "Invalid Job ID"
+        else
+            log_error("Join Server: Lỗi khi teleport: " .. detailed_error)
+            return false, detailed_error
+        end
     end
 end
 
@@ -451,6 +460,18 @@ task.spawn(function()
                 if config.operation_mode == "receive_pet" then
                     log_info("Chế độ: Nhận Pet. Đang chờ giao dịch.")
                     send_job_id()
+                    -- Kiểm tra nếu tài khoản gửi không thể join (server đầy)
+                    if config.sender_job_id and config.sender_job_id ~= "" then
+                        log_info("Nhận Job ID của tài khoản gửi: " .. config.sender_job_id)
+                        local success, error_reason = join_server_by_job_id(config.sender_job_id)
+                        if success then
+                            log_info("Join Server: Tài khoản chứa đã teleport đến server của tài khoản gửi.")
+                            task.wait(10)
+                        else
+                            log_error("Join Server: Tài khoản chứa không thể teleport đến tài khoản gửi: " .. error_reason)
+                            update_status_text("Teleport Failed! Join server manually with Job ID: " .. config.sender_job_id, Color3.new(1, 0, 0))
+                        end
+                    end
                 elseif config.operation_mode == "trade_pet" then
                     if not config.receiver_account_name or config.receiver_account_name == "" then
                         log_warning("Chế độ Gửi Pet nhưng không có tài khoản nhận được cấu hình.")
@@ -458,12 +479,14 @@ task.spawn(function()
                         log_info(string.format("Chế độ: Gửi Pet. Acc chứa: %s, Pet cần gửi: %s", 
                             config.receiver_account_name, table.concat(config.pets_to_trade_for_this_account, ", ") or "None"))
                         if config.job_id_to_join and config.job_id_to_join ~= "" then
-                            local joined = join_server_by_job_id(config.job_id_to_join)
-                            if joined then
+                            local success, error_reason = join_server_by_job_id(config.job_id_to_join)
+                            if success then
                                 log_info("Join Server: Đang chờ teleport hoàn tất...")
                                 task.wait(10)
                             else
-                                log_error("Join Server: Thất bại, tiếp tục thử trong vòng lặp tiếp theo.")
+                                log_error("Join Server: Thất bại, lý do: " .. error_reason)
+                                update_status_text("Teleport Failed! Join server manually with Job ID: " .. config.job_id_to_join, Color3.new(1, 0, 0))
+                                send_job_id() -- Gửi Job ID của tài khoản gửi để tài khoản chứa thử join
                             end
                         else
                             log_warning("Không có Job ID để join server của tài khoản chứa.")
