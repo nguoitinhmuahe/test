@@ -1,0 +1,497 @@
+_G.UserConfig = {
+    AppServerIP = "14.226.80.56",
+    AppServerPort = 5000,
+    UpdateInterval = 1,
+    RetryAttempts = 3,
+    RetryDelay = 10,
+    AutoAcceptTimeout = 10,
+    TradeWaitDelay = 2,
+    TeleportOffset = 5,
+    DefaultPlaceId = "126884695634066",
+    TeleportCooldown = 30
+}
+
+-- Services
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TeleportService = game:GetService("TeleportService")
+
+-- Variables
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local last_teleport_time = 0
+local TELEPORT_COOLDOWN = _G.UserConfig.TeleportCooldown
+local APP_SERVER_URL = string.format("http://%s:%d", _G.UserConfig.AppServerIP, _G.UserConfig.AppServerPort)
+local ACCOUNT_NAME = LocalPlayer.Name
+local has_connected_to_app_successfully = false
+local is_fetching = false
+
+-- Kiểm tra HTTP Request API
+local http_request_executor = http_request or request or (syn and syn.request) or (fluxus and fluxus.request) or (http and http.request)
+if not http_request_executor then
+    warn("[INIT_ERROR] ❌ Executor không hỗ trợ HTTP Request API cần thiết. Script sẽ không hoạt động.")
+    return
+end
+
+-- GUI Setup
+local status_gui_name = "PetTraderGui_" .. ACCOUNT_NAME
+local status_text_name = "StatusText"
+local status_text_label = nil
+
+local function create_gui()
+    local existing_gui = PlayerGui:FindFirstChild(status_gui_name)
+    if existing_gui then
+        existing_gui:Destroy()
+    end
+    local gui = Instance.new("ScreenGui")
+    gui.Name = status_gui_name
+    gui.Parent = PlayerGui
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 150, 0, 30)
+    frame.Position = UDim2.new(1, -160, 0, 10)
+    frame.BackgroundColor3 = Color3.new(0, 0, 0)
+    frame.BackgroundTransparency = 0.5
+    frame.Parent = gui
+    local text_label = Instance.new("TextLabel")
+    text_label.Name = status_text_name
+    text_label.Size = UDim2.new(1, 0, 1, 0)
+    text_label.BackgroundTransparency = 1
+    text_label.TextColor3 = Color3.new(1, 1, 1)
+    text_label.TextScaled = true
+    text_label.Font = Enum.Font.SourceSansBold
+    text_label.Text = "Script: Connecting..."
+    text_label.ZIndex = 10
+    text_label.Parent = frame
+    status_text_label = text_label
+    return text_label
+end
+
+local function update_status_text(text, color)
+    if status_text_label then
+        status_text_label.Text = "Script: " .. text
+        if color then
+            status_text_label.TextColor3 = color
+        end
+    end
+end
+
+-- Logging Functions
+local function send_log_to_app(message, level)
+    local final_message = (type(message) == "string" and message) or tostring(message)
+    local data = {
+        account_name = ACCOUNT_NAME,
+        status = level,
+        message = final_message
+    }
+    local json_data = HttpService:JSONEncode(data)
+    local headers = { ["Content-Type"] = "application/json" }
+    local success, response_body, status_code = http_request_executor({
+        Url = APP_SERVER_URL .. "/post_trade_status",
+        Method = "POST",
+        Headers = headers,
+        Body = json_data
+    })
+    if not success then
+        print(string.format("[LOG %s] %s", level:upper(), final_message))
+    end
+end
+
+local function log_error(message) send_log_to_app(message, "error") end
+local function log_warning(message) send_log_to_app(message, "warning") end
+local function log_info(message) send_log_to_app(message, "info") end
+local function log_success(message) send_log_to_app(message, "success") end
+local function log_failed(message) send_log_to_app(message, "failed") end
+local function log_debug(message) send_log_to_app(message, "debug") end
+
+-- HTTP Request Wrapper
+local function perform_http_request(method, url, headers, body)
+    local request_options = {
+        Url = url,
+        Method = method,
+        Headers = headers or {},
+        Body = body
+    }
+    local success, response = pcall(function()
+        return http_request_executor(request_options)
+    end)
+    if success and type(response) == "table" and response.StatusCode then
+        return true, response.Body, response.StatusCode
+    else
+        return false, tostring(response), nil
+    end
+end
+
+local function post_to_app(endpoint, data_table)
+    local json_data = HttpService:JSONEncode(data_table)
+    local headers = { ["Content-Type"] = "application/json" }
+    local success, response_body, status_code = perform_http_request("POST", APP_SERVER_URL .. endpoint, headers, json_data)
+    if success then
+        if type(response_body) ~= "string" then
+            return false, "Phản hồi không phải chuỗi: " .. tostring(response_body) .. " (Code: " .. tostring(status_code) .. ")"
+        end
+        local decode_success, decoded_data = pcall(HttpService.JSONDecode, HttpService, response_body)
+        if decode_success and type(decoded_data) == "table" then
+            if decoded_data.status == "success" then
+                return true, decoded_data.message
+            else
+                return false, decoded_data.error or ("Phản hồi App có status lỗi (" .. tostring(status_code) .. "): " .. tostring(response_body))
+            end
+        else
+            return false, "Lỗi giải mã JSON từ App (" .. tostring(status_code) .. "): " .. tostring(response_body)
+        end
+    else
+        return false, "Lỗi kết nối App Server: " .. tostring(response_body)
+    end
+end
+
+-- Auto Accept Pet
+local function start_auto_accept_listener()
+    local GiftNotification = PlayerGui:WaitForChild("Gift_Notification", _G.UserConfig.AutoAcceptTimeout)
+    if not GiftNotification then
+        log_warning("Auto Accept: Không tìm thấy Gift_Notification GUI.")
+        return
+    end
+    local Frame = GiftNotification:WaitForChild("Frame", 5)
+    if not Frame then
+        log_warning("Auto Accept: Không tìm thấy Frame trong Gift_Notification.")
+        return
+    end
+    local function clickAcceptButton(notification_frame)
+        local success, acceptButton = pcall(function()
+            return notification_frame.Holder.Frame.Accept
+        end)
+        if success and acceptButton and acceptButton:IsA("ImageButton") then
+            log_info("Auto Accept: Tìm thấy nút Accept. Đang tự động click.")
+            local absPos = acceptButton.AbsolutePosition
+            local absSize = acceptButton.AbsoluteSize
+            local clickPos = absPos + (absSize / 2)
+            VirtualInputManager:SendMouseButtonEvent(clickPos.X, clickPos.Y, 0, true, game, 0)
+            VirtualInputManager:SendMouseButtonEvent(clickPos.X, clickPos.Y, 0, false, game, 0)
+            log_success("Auto Accept: Đã click Accept pet.")
+        else
+            log_debug("Auto Accept: Không tìm thấy nút Accept.")
+        end
+    end
+    for _, child in pairs(Frame:GetChildren()) do
+        if child:IsA("ImageLabel") then
+            clickAcceptButton(child)
+        end
+    end
+    Frame.ChildAdded:Connect(function(v)
+        if v:IsA("ImageLabel") then
+            task.spawn(function()
+                task.wait(0.1)
+                clickAcceptButton(v)
+            end)
+        end
+    end)
+    log_info("Auto Accept: Bắt đầu lắng nghe thông báo quà tặng.")
+end
+
+-- Fetch Pet Data
+local function get_pet_data()
+    local current_pets = {}
+    local bags = {LocalPlayer.Backpack}
+    if LocalPlayer.Character then
+        table.insert(bags, LocalPlayer.Character)
+    end
+    for _, bag in ipairs(bags) do
+        for _, item in ipairs(bag:GetChildren()) do
+            if item:IsA("Tool") then
+                local itemType = item:GetAttribute("ItemType")
+                local petUUID = item:GetAttribute("PET_UUID")
+                local owner = item:GetAttribute("OWNER")
+                local petType = item:GetAttribute("PetType")
+                local kg = item:GetAttribute("KG")
+                local age = item:GetAttribute("AGE")
+                if itemType == "Pet" and petUUID and owner == ACCOUNT_NAME and petType == "Pet" then
+                    table.insert(current_pets, {
+                        name = item.Name,
+                        uuid = petUUID,
+                        kg = kg or 0,
+                        age = age or 0,
+                        owner = owner
+                    })
+                    log_debug(string.format("Tìm thấy pet: %s (UUID: %s, KG: %s, Age: %s)", 
+                        item.Name, petUUID, kg or 0, age or 0))
+                end
+            end
+        end
+    end
+    log_info(string.format("Tổng cộng %d pet được tìm thấy.", #current_pets))
+    return current_pets
+end
+
+-- Send Pet Data to Server
+local function send_pet_data()
+    local pets = get_pet_data()
+    local data = {
+        account_name = ACCOUNT_NAME,
+        pets = pets
+    }
+    local success, msg = post_to_app("/post_pet_data", data)
+    if success then
+        log_debug(string.format("Đã gửi dữ liệu %d pet về App.", #pets))
+        return true
+    else
+        log_error("Gửi dữ liệu pet về App thất bại: " .. msg)
+        return false
+    end
+end
+
+-- Send Job ID to Server
+local function send_job_id()
+    local job_id = game.JobId
+    if not job_id or job_id == "" then
+        log_warning("Send Job ID: Job ID trống, có thể đang ở chế độ single-player hoặc studio.")
+        return false
+    end
+    local data = {
+        account_name = ACCOUNT_NAME,
+        job_id = job_id
+    }
+    local success, msg = post_to_app("/post_job_id", data)
+    if success then
+        log_debug("Đã gửi Job ID: " .. job_id .. " về App.")
+        return true
+    else
+        log_error("Gửi Job ID thất bại: " .. msg)
+        return false
+    end
+end
+
+-- Teleport to Player
+local function teleport_to_player(target_player_name)
+    local targetPlayer = Players:FindFirstChild(target_player_name)
+    if not targetPlayer then
+        log_warning("Teleport: Không tìm thấy người chơi mục tiêu (" .. target_player_name .. ").")
+        return false
+    end
+    local targetCharacter = targetPlayer.Character
+    if not targetCharacter then
+        log_warning("Teleport: Người chơi mục tiêu (" .. target_player_name .. ") chưa load character.")
+        return false
+    end
+    local targetHumanoidRootPart = targetCharacter:FindFirstChild("HumanoidRootPart")
+    if not targetHumanoidRootPart then
+        log_warning("Teleport: Không tìm thấy HumanoidRootPart của người chơi mục tiêu (" .. target_player_name .. ").")
+        return false
+    end
+    local myCharacter = LocalPlayer.Character
+    if not myCharacter then
+        log_warning("Teleport: Không tìm thấy Character của mình.")
+        return false
+    end
+    local myHumanoidRootPart = myCharacter:FindFirstChild("HumanoidRootPart")
+    if not myHumanoidRootPart then
+        log_warning("Teleport: Không tìm thấy HumanoidRootPart của mình.")
+        return false
+    end
+    myHumanoidRootPart.CFrame = targetHumanoidRootPart.CFrame * CFrame.new(0, 0, _G.UserConfig.TeleportOffset)
+    log_info("Teleport: Đã teleport đến vị trí của " .. target_player_name)
+    return true
+end
+
+-- Trade Pet
+local function trade_pet(pet_name, receiver_name)
+    log_info(string.format("Trade: Đang chuẩn bị gửi pet '%s' tới '%s'.", pet_name, receiver_name))
+    local petTool = LocalPlayer.Backpack:FindFirstChild(pet_name)
+    if not petTool and LocalPlayer.Character then
+        petTool = LocalPlayer.Character:FindFirstChild(pet_name)
+    end
+    if not petTool or not petTool:IsA("Tool") or petTool:GetAttribute("ItemType") ~= "Pet" then
+        local message = "Trade: Không tìm thấy pet '" .. pet_name .. "' hoặc nó không phải là pet hợp lệ."
+        log_failed(message)
+        return false
+    end
+    local humanoid = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        local equip_success, equip_msg = pcall(function()
+            humanoid:EquipTool(petTool)
+        end)
+        if not equip_success then
+            local message = "Trade: Không thể trang bị pet '" .. pet_name .. "': " .. equip_msg
+            log_failed(message)
+            return false
+        end
+        task.wait(0.5)
+    else
+        local message = "Trade: Không tìm thấy Humanoid để trang bị pet."
+        log_failed(message)
+        return false
+    end
+    local receiverPlayer = Players:FindFirstChild(receiver_name)
+    if not receiverPlayer then
+        local message = "Trade: Không tìm thấy người chơi nhận '" .. receiver_name .. "' trong server."
+        log_failed(message)
+        return false
+    end
+    if not teleport_to_player(receiver_name) then
+        local message = "Trade: Không thể teleport đến người nhận. Hủy trade."
+        log_failed(message)
+        return false
+    end
+    task.wait(1)
+    local PetGiftingService = ReplicatedStorage:WaitForChild("GameEvents", 5)
+    if PetGiftingService then
+        PetGiftingService = PetGiftingService:WaitForChild("PetGiftingService", 5)
+    end
+    if not PetGiftingService then
+        local message = "Trade: Không tìm thấy PetGiftingService trong ReplicatedStorage."
+        log_error(message)
+        return false
+    end
+    local args = { "GivePet", receiverPlayer }
+    local fire_success, fire_msg = pcall(function()
+        PetGiftingService:FireServer(unpack(args))
+    end)
+    if fire_success then
+        log_success(string.format("Trade: Đã gửi yêu cầu trade pet '%s' tới '%s'.", pet_name, receiver_name))
+        return true
+    else
+        local message = "Trade: Lỗi khi FireServer PetGiftingService: " .. fire_msg
+        log_failed(message)
+        return false
+    end
+end
+
+-- Join Server by Job ID
+local function join_server_by_job_id(job_id)
+    if not job_id or job_id == "" then
+        log_error("Join Server: Job ID trống hoặc không hợp lệ.")
+        return false
+    end
+    local current_time = tick()
+    if current_time - last_teleport_time < TELEPORT_COOLDOWN then
+        log_info("Join Server: Đang trong thời gian cooldown, bỏ qua teleport (thời gian còn lại: " .. 
+                 string.format("%.1f", TELEPORT_COOLDOWN - (current_time - last_teleport_time)) .. " giây).")
+        return false
+    end
+    log_info("Join Server: Thử teleport đến server với Job ID: " .. job_id .. " (placeId: " .. _G.UserConfig.DefaultPlaceId .. ").")
+    local teleportOptions = Instance.new("TeleportOptions")
+    teleportOptions.ServerInstanceId = job_id
+    local success, error_msg = pcall(function()
+        TeleportService:TeleportPartyAsync(tonumber(_G.UserConfig.DefaultPlaceId), {LocalPlayer}, teleportOptions)
+    end)
+    if success then
+        last_teleport_time = current_time
+        log_info("Join Server: Đã gửi yêu cầu teleport đến server với Job ID: " .. job_id .. ".")
+        return true
+    else
+        log_error("Join Server: Lỗi khi teleport: " .. tostring(error_msg))
+        update_status_text("Teleport Failed! Join server manually with Job ID: " .. job_id, Color3.new(1, 0, 0))
+        return false
+    end
+end
+
+-- Get Config from Server
+local function get_config_from_app()
+    if ACCOUNT_NAME == "" then
+        log_warning("GET Settings: Tên tài khoản trống, không thể gửi yêu cầu.")
+        return nil
+    end
+    local post_data = { account = ACCOUNT_NAME }
+    local success, response_body, status_code = perform_http_request("POST", APP_SERVER_URL .. "/fetch_config", { ["Content-Type"] = "application/json" }, HttpService:JSONEncode(post_data))
+    print("DEBUG: POST /fetch_config, success=" .. tostring(success) .. ", response_body=" .. tostring(response_body) .. ", status_code=" .. tostring(status_code))
+    if success then
+        if type(response_body) ~= "string" then
+            log_warning("GET Settings: Phản hồi không phải chuỗi: " .. tostring(response_body))
+            return nil
+        end
+        local decode_success, data = pcall(HttpService.JSONDecode, HttpService, response_body)
+        if decode_success and type(data) == "table" and data.status == "success" and type(data.config) == "table" then
+            return data.config
+        else
+            log_warning("GET Settings: Phản hồi JSON không hợp lệ: " .. tostring(response_body))
+            return nil
+        end
+    else
+        log_warning("GET Settings: Lỗi HTTP POST: " .. tostring(response_body) .. " (Status: " .. tostring(status_code) .. ")")
+        return nil
+    end
+end
+
+-- Main Loop
+task.spawn(function()
+    create_gui()
+    update_status_text("Connecting...", Color3.new(1, 1, 0))
+    start_auto_accept_listener()
+
+    while RunService:IsRunning() do
+        if not is_fetching then
+            is_fetching = true
+            local config = nil
+            local attempts_to_try = has_connected_to_app_successfully and _G.UserConfig.RetryAttempts or 1
+            for attempt = 1, attempts_to_try do
+                config = get_config_from_app()
+                if config then
+                    has_connected_to_app_successfully = true
+                    update_status_text("Online", Color3.new(0, 1, 0))
+                    break
+                else
+                    log_warning(string.format("Không thể lấy cấu hình từ App (thử %d/%d).", attempt, attempts_to_try))
+                end
+                task.wait(_G.UserConfig.RetryDelay)
+            end
+            if not config then
+                if has_connected_to_app_successfully then
+                    log_error("App Server đã đóng hoặc không thể kết nối. Đang kick người chơi.")
+                    update_status_text("Offline (Kicked)", Color3.new(1, 0, 0))
+                    LocalPlayer:Kick("App đã bị đóng hoặc mất kết nối. Vui lòng kiểm tra lại và khởi động App.")
+                    break
+                else
+                    log_warning("Không thể kết nối App Server ban đầu. Đang chờ App khởi động.")
+                    update_status_text("No App Connection", Color3.new(1, 0.5, 0))
+                end
+            else
+                send_pet_data()
+                if config.operation_mode == "receive_pet" then
+                    log_info("Chế độ: Nhận Pet. Đang chờ giao dịch.")
+                    send_job_id()
+                elseif config.operation_mode == "trade_pet" then
+                    if not config.receiver_account_name or config.receiver_account_name == "" then
+                        log_warning("Chế độ Gửi Pet nhưng không có tài khoản nhận được cấu hình.")
+                    else
+                        log_info(string.format("Chế độ: Gửi Pet. Acc chứa: %s, Pet cần gửi: %s", 
+                            config.receiver_account_name, table.concat(config.pets_to_trade_for_this_account, ", ") or "None"))
+                        if config.job_id_to_join and config.job_id_to_join ~= "" then
+                            local joined = join_server_by_job_id(config.job_id_to_join)
+                            if joined then
+                                log_info("Join Server: Đang chờ teleport hoàn tất...")
+                                task.wait(10)
+                            else
+                                log_error("Join Server: Thất bại, tiếp tục thử trong vòng lặp tiếp theo.")
+                            end
+                        else
+                            log_warning("Không có Job ID để join server của tài khoản chứa.")
+                        end
+                        if #config.pets_to_trade_for_this_account > 0 then
+                            for _, pet_name in ipairs(config.pets_to_trade_for_this_account) do
+                                local trade_success = trade_pet(pet_name, config.receiver_account_name)
+                                if trade_success then
+                                    log_success(string.format("Đã gửi pet '%s' thành công tới '%s'.", pet_name, config.receiver_account_name))
+                                else
+                                    log_failed(string.format("Gửi pet '%s' tới '%s' thất bại.", pet_name, config.receiver_account_name))
+                                end
+                                task.wait(_G.UserConfig.TradeWaitDelay)
+                            end
+                            log_info("Đã hoàn tất thử trade các pet được yêu cầu.")
+                        else
+                            log_info("Không có pet nào để trade theo yêu cầu từ App.")
+                        end
+                    end
+                else
+                    log_info("Chế độ: Nhàn rỗi. Đang chờ lệnh từ App.")
+                    update_status_text("Idle", Color3.new(1, 1, 1))
+                end
+            end
+            is_fetching = false
+        end
+        task.wait(_G.UserConfig.UpdateInterval)
+    end
+    log_info("Script đã dừng vì game không còn chạy.")
+    update_status_text("OFFLINE (Game Closed)", Color3.new(1, 0, 0))
+end)
