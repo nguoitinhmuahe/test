@@ -1,6 +1,5 @@
--- ok
 _G.UserConfig = {
-    AppServerIP = "14.226.80.56",
+    AppServerIP = "127.0.0.1",
     AppServerPort = 5000,
     UpdateInterval = 1,
     RetryAttempts = 3,
@@ -9,390 +8,254 @@ _G.UserConfig = {
     TradeWaitDelay = 2,
     TeleportOffset = 5,
     DefaultPlaceId = "126884695634066",
-    TeleportCooldown = 15,
-    MaxTeleportRetries = 3
+    TeleportCooldown = 30
 }
 
 -- Services
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TeleportService = game:GetService("TeleportService")
-local GuiService = game:GetService("GuiService")
 
 -- Variables
 local LocalPlayer = Players.LocalPlayer
-local last_teleport_time = 0
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local APP_SERVER_URL = "http://" .. _G.UserConfig.AppServerIP .. ":" .. _G.UserConfig.AppServerPort
+if string.sub(APP_SERVER_URL, #APP_SERVER_URL) == "/" then 
+    APP_SERVER_URL = string.sub(APP_SERVER_URL, 1, #APP_SERVER_URL - 1)
+end
+local UPDATE_INTERVAL = _G.UserConfig.UpdateInterval
+local RETRY_ATTEMPTS = _G.UserConfig.RetryAttempts
+local RETRY_DELAY = _G.UserConfig.RetryDelay
 local TELEPORT_COOLDOWN = _G.UserConfig.TeleportCooldown
-local server_url = string.format("http://%s:%d", _G.UserConfig.AppServerIP, _G.UserConfig.AppServerPort)
-local script_status = "Connecting..."
-local is_fetching = false
-local trade_status = "Idle"
-local attempted_job_ids = {}
+local ACCOUNT_NAME = LocalPlayer.Name
+local has_connected_to_app_successfully = false
+local last_teleport_time = 0
+
+-- HTTP Request Executor
+local http_request_executor = http_request or request or (syn and syn.request) or (fluxus and fluxus.request) or (http and http.request)
+if not http_request_executor then
+    error("Executor không hỗ trợ HTTP Request API cần thiết.")
+end
 
 -- GUI Setup
-local function create_gui()
-    local gui = Instance.new("ScreenGui")
-    gui.Name = "PetTraderGui"
-    gui.Parent = game.CoreGui
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 200, 0, 50)
-    frame.Position = UDim2.new(0, 10, 0, 10)
-    frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-    frame.BorderSizePixel = 0
-    frame.Parent = gui
-    local status_label = Instance.new("TextLabel")
-    status_label.Size = UDim2.new(1, 0, 1, 0)
-    status_label.BackgroundTransparency = 1
-    status_label.TextColor3 = Color3.fromRGB(255, 255, 255)
-    status_label.Text = "Script: " .. script_status
-    status_label.TextScaled = true
-    status_label.Parent = frame
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 8)
-    corner.Parent = frame
-    return status_label
+local status_gui_name = "ScriptStatusGUI_" .. ACCOUNT_NAME
+local status_text_name = "OnlineStatusText"
+local status_text_label = nil
+
+local function setup_status_gui()
+    local existing_gui = PlayerGui:FindFirstChild(status_gui_name)
+    if existing_gui then existing_gui:Destroy() end
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = status_gui_name
+    ScreenGui.Parent = PlayerGui
+    local TextLabel = Instance.new("TextLabel")
+    TextLabel.Name = status_text_name
+    TextLabel.Size = UDim2.new(0, 150, 0, 30)
+    TextLabel.Position = UDim2.new(1, -160, 0, 10)
+    TextLabel.BackgroundColor3 = Color3.new(0, 0, 0)
+    TextLabel.BackgroundTransparency = 0.5
+    TextLabel.TextColor3 = Color3.new(1, 1, 1)
+    TextLabel.TextScaled = true
+    TextLabel.Font = Enum.Font.SourceSansBold
+    TextLabel.Text = "Script: OFFLINE"
+    TextLabel.ZIndex = 10
+    TextLabel.Parent = ScreenGui
+    status_text_label = TextLabel
 end
 
-local status_label = create_gui()
-
--- Logging Function
-local function log_message(message, level)
-    print(string.format("[LOG %s] %s", level:upper(), message))
-    local text_color = Color3.fromRGB(255, 255, 255)
-    if level:lower() == "error" then
-        text_color = Color3.fromRGB(255, 0, 0)
-    elseif level:lower() == "success" then
-        text_color = Color3.fromRGB(0, 255, 0)
-    elseif level:lower() == "warning" then
-        text_color = Color3.fromRGB(255, 165, 0)
-    elseif level:lower() == "debug" then
-        text_color = Color3.fromRGB(128, 128, 128)
+local function update_status_text(text, color)
+    if status_text_label then
+        status_text_label.Text = "Script: " .. text
+        if color then status_text_label.TextColor3 = color end
     end
-    status_label.TextColor3 = text_color
-    status_label.Text = string.format("Script: %s", message)
 end
 
--- HTTP Request Wrapper
-local function http_request(method, endpoint, data)
-    local success, response = pcall(function()
-        local url = server_url .. endpoint
-        local request_data = {
-            Url = url,
-            Method = method,
-            Headers = { ["Content-Type"] = "application/json" }
-        }
-        if data then
-            request_data.Body = HttpService:JSONEncode(data)
+-- HTTP Request
+local function perform_http_request(method, url, headers, body)
+    local request_options = { Url = url, Method = method, Headers = headers or {}, Body = body }
+    local success, response = pcall(function() return http_request_executor(request_options) end)
+    if success and type(response) == "table" and response.StatusCode then
+        return true, response.Body, response.StatusCode
+    else
+        return false, tostring(response), nil
+    end
+end
+
+local function post_to_app(endpoint, data_table)
+    local json_data = HttpService:JSONEncode(data_table)
+    local headers = { ["Content-Type"] = "application/json" }
+    local success, response_body, status_code = perform_http_request("POST", APP_SERVER_URL .. endpoint, headers, json_data)
+    if success and type(response_body) == "string" then
+        local decode_success, decoded_data = pcall(HttpService.JSONDecode, HttpService, response_body)
+        if decode_success and type(decoded_data) == "table" then
+            if decoded_data.status == "success" then
+                return true, decoded_data
+            else
+                return false, decoded_data.error or "Phản hồi lỗi từ server"
+            end
+        else
+            return false, "Lỗi giải mã JSON"
         end
-        return HttpService:RequestAsync(request_data)
+    else
+        return false, "Lỗi kết nối: " .. tostring(response_body)
+    end
+end
+
+-- Auto Accept
+local function start_auto_accept_listener()
+    local GiftNotification = PlayerGui:WaitForChild("Gift_Notification", _G.UserConfig.AutoAcceptTimeout)
+    if not GiftNotification then return end
+    local Frame = GiftNotification:WaitForChild("Frame", 5)
+    if not Frame then return end
+    local function clickAcceptButton(notification_frame)
+        local success, acceptButton = pcall(function() return notification_frame.Holder.Frame.Accept end)
+        if success and acceptButton and acceptButton:IsA("ImageButton") then
+            local absPos = acceptButton.AbsolutePosition
+            local absSize = acceptButton.AbsoluteSize
+            local clickPos = absPos + (absSize / 2)
+            VirtualInputManager:SendMouseButtonEvent(clickPos.X, clickPos.Y, 0, true, game, 0)
+            VirtualInputManager:SendMouseButtonEvent(clickPos.X, clickPos.Y, 0, false, game, 0)
+        end
+    end
+    for _, child in pairs(Frame:GetChildren()) do
+        if child:IsA("ImageLabel") then clickAcceptButton(child) end
+    end
+    Frame.ChildAdded:Connect(function(v)
+        if v:IsA("ImageLabel") then task.spawn(clickAcceptButton, v) end
     end)
-    if success and response.Success then
-        return true, HttpService:JSONDecode(response.Body)
-    else
-        local error_msg = response and response.StatusMessage or "Unknown error"
-        log_message(string.format("Lỗi %s %s: %s", method, endpoint, error_msg), "error")
-        return false, nil
-    end
 end
 
--- Report Failed Job ID
-local function report_job_failure(job_id)
-    local data = { job_id = job_id }
-    local success, response = http_request("POST", "/report_job_failure", data)
-    if success then
-        log_message(string.format("Đã báo cáo Job ID %s thất bại.", job_id), "info")
-        return true
-    else
-        log_message(string.format("Lỗi khi báo cáo Job ID %s thất bại.", job_id), "error")
-        return false
-    end
-end
-
--- Fetch Pet Data
-local function get_pet_data()
-    local pets = {}
-    local pet_inventory = LocalPlayer:FindFirstChild("PetInventory") or game.Workspace:FindFirstChild("PetInventory")
-    if pet_inventory then
-        for _, pet in ipairs(pet_inventory:GetChildren()) do
-            table.insert(pets, {
-                name = pet.Name,
-                uuid = pet:FindFirstChild("UUID") and pet.UUID.Value or "N/A",
-                kg = pet:FindFirstChild("KG") and pet.KG.Value or "N/A",
-                age = pet:FindFirstChild("Age") and pet.Age.Value or "N/A",
-                owner = LocalPlayer.Name
-            })
+-- Send Pet Data
+local function sendPetDataToApp()
+    local current_pets = {}
+    local bags = {LocalPlayer.Backpack}
+    if LocalPlayer.Character then table.insert(bags, LocalPlayer.Character) end
+    for _, bag in ipairs(bags) do
+        for _, item in ipairs(bag:GetChildren()) do
+            if item:IsA("Tool") and item:GetAttribute("ItemType") == "Pet" and item:GetAttribute("OWNER") == ACCOUNT_NAME then
+                table.insert(current_pets, {
+                    name = item.Name,
+                    uuid = item:GetAttribute("PET_UUID"),
+                    kg = item:GetAttribute("KG") or 0,
+                    age = item:GetAttribute("AGE") or 0,
+                    owner = ACCOUNT_NAME
+                })
+            end
         end
     end
-    return pets
+    local success, msg = post_to_app("/post_pet_data", { account_name = ACCOUNT_NAME, pets = current_pets })
+    if success then print("Đã gửi dữ liệu pet") else print("Gửi pet thất bại: " .. msg) end
 end
 
--- Send Pet Data to Server
-local function send_pet_data()
-    local pets = get_pet_data()
-    local data = {
-        account_name = LocalPlayer.Name,
-        pets = pets
-    }
-    local success, response = http_request("POST", "/post_pet_data", data)
-    if success then
-        log_message(string.format("Đã gửi dữ liệu %d pet về App.", #pets), "debug")
-        return true
-    else
-        log_message("Lỗi khi gửi dữ liệu pet về App.", "error")
-        return false
-    end
-end
-
--- Send Job ID to Server (for receiver)
-local function send_job_id()
+-- Send Job ID
+local function sendJobIdToApp()
     local job_id = game.JobId
-    if not job_id or job_id == "" then
-        log_message("Send Job ID: Job ID trống, có thể đang ở chế độ single-player hoặc studio.", "warning")
-        return false
-    end
-    local data = {
-        account_name = LocalPlayer.Name,
-        job_id = job_id
-    }
-    local success, response = http_request("POST", "/post_job_id", data)
-    if success then
-        log_message(string.format("Đã gửi Job ID: %s về App.", job_id), "debug")
-        return true
-    else
-        log_message("Lỗi khi gửi Job ID về App.", "error")
-        return false
-    end
+    if not job_id or job_id == "" then return false end
+    local success, msg = post_to_app("/post_job_id", { account_name = ACCOUNT_NAME, job_id = job_id })
+    if success then print("Đã gửi Job ID") else print("Gửi Job ID thất bại: " .. msg) end
+    return success
+end
+
+-- Teleport
+local function teleportToPlayer(target_player_name)
+    local targetPlayer = Players:FindFirstChild(target_player_name)
+    if not targetPlayer or not targetPlayer.Character or not targetPlayer.Character:FindFirstChild("HumanoidRootPart") then return false end
+    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return false end
+    LocalPlayer.Character.HumanoidRootPart.CFrame = targetPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, _G.UserConfig.TeleportOffset)
+    return true
+end
+
+-- Give Pet
+local function givePet(pet_name, receiver_player_name)
+    local petTool = LocalPlayer.Backpack:FindFirstChild(pet_name) or (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild(pet_name))
+    if not petTool or not petTool:IsA("Tool") or petTool:GetAttribute("ItemType") ~= "Pet" then return false, "Pet không hợp lệ" end
+    local humanoid = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if humanoid then humanoid:EquipTool(petTool) end
+    task.wait(0.5)
+    local receiverPlayer = Players:FindFirstChild(receiver_player_name)
+    if not receiverPlayer then return false, "Không tìm thấy người nhận" end
+    if not teleportToPlayer(receiver_player_name) then return false, "Teleport thất bại" end
+    task.wait(1)
+    local PetGiftingService = ReplicatedStorage:WaitForChild("GameEvents", 5):WaitForChild("PetGiftingService", 5)
+    if not PetGiftingService then return false, "Không tìm thấy PetGiftingService" end
+    local success, msg = pcall(function() PetGiftingService:FireServer("GivePet", receiverPlayer) end)
+    return success, success and "Gửi thành công" or "Gửi thất bại: " .. msg
 end
 
 -- Join Server by Job ID
 local function join_server_by_job_id(job_id)
-    if not job_id or job_id == "" then
-        log_message("Join Server: Job ID trống.", "error")
-        status_label.Text = "Script: Teleport Failed! Join server manually."
-        return false
-    end
-    if table.find(attempted_job_ids, job_id) then
-        log_message(string.format("Join Server: Job ID %s đã thử trước đó, bỏ qua.", job_id), "warning")
-        return false
-    end
-    table.insert(attempted_job_ids, job_id)
+    if not job_id or job_id == "" then return false end
     local current_time = tick()
-    if current_time - last_teleport_time < TELEPORT_COOLDOWN then
-        log_message(string.format("Join Server: Chờ %d giây trước khi teleport lại.", TELEPORT_COOLDOWN), "warning")
-        return false
-    end
-    last_teleport_time = current_time
+    if current_time - last_teleport_time < TELEPORT_COOLDOWN then return false end
     local teleportOptions = Instance.new("TeleportOptions")
     teleportOptions.ServerInstanceId = job_id
-    log_message(string.format("Join Server: Thử teleport đến server với Job ID: %s (placeId: %s).", job_id, _G.UserConfig.DefaultPlaceId), "info")
-    local success, result = pcall(function()
+    local success, error_msg = pcall(function()
         TeleportService:TeleportPartyAsync(tonumber(_G.UserConfig.DefaultPlaceId), {LocalPlayer}, teleportOptions)
     end)
-    if success then
-        log_message(string.format("Join Server: Đã gửi yêu cầu teleport đến server với Job ID: %s.", job_id), "info")
-        return true
-    else
-        if string.find(tostring(result), "full") or string.find(tostring(result), "capacity") then
-            log_message(string.format("Join Server: Server với Job ID %s đầy, báo cáo thất bại.", job_id), "warning")
-            report_job_failure(job_id)
-            attempted_job_ids[#attempted_job_ids] = nil
-            return false
-        else
-            log_message(string.format("Join Server: Lỗi khi teleport: %s", result), "error")
-            status_label.Text = string.format("Script: Teleport Failed! Join server manually with Job ID: %s", job_id)
-            return false
-        end
-    end
+    if success then last_teleport_time = current_time end
+    return success
 end
 
--- Auto Accept Trade (for receiver)
-local function auto_accept_trade(timeout)
-    local trade_window = LocalPlayer.PlayerGui:FindFirstChild("TradeUI") or game.Workspace:FindFirstChild("TradeUI")
-    if trade_window then
-        local start_time = tick()
-        while tick() - start_time < timeout do
-            local accept_button = trade_window:FindFirstChild("AcceptButton")
-            if accept_button and accept_button.Visible then
-                log_message("Auto Accept: Đã tìm thấy nút Accept, đang nhấn...", "debug")
-                accept_button:Activate()
-                return true
-            end
-            wait(0.1)
-        end
-        log_message("Auto Accept: Hết thời gian chờ, không tìm thấy nút Accept.", "warning")
-        return false
-    end
-    log_message("Auto Accept: Không tìm thấy Trade UI.", "warning")
-    return false
-end
-
--- Send Trade Status to Server
-local function send_trade_status(status, pet_name, receiver_name, message)
-    local data = {
-        account_name = LocalPlayer.Name,
-        status = status,
-        pet_name = pet_name or "N/A",
-        receiver_name = receiver_name or "N/A",
-        message = message or "Không có tin nhắn chi tiết."
-    }
-    local success, response = http_request("POST", "/post_trade_status", data)
-    if success then
-        log_message(string.format("Đã gửi trạng thái giao dịch: %s", status), "debug")
-        return true
-    else
-        log_message("Lỗi khi gửi trạng thái giao dịch về App.", "error")
-        return false
-    end
-end
-
--- Trade Pet (for sender)
-local function trade_pet(pet_name, receiver_name)
-    local pet_inventory = LocalPlayer:FindFirstChild("PetInventory") or game.Workspace:FindFirstChild("PetInventory")
-    if not pet_inventory then
-        log_message("Trade Pet: Không tìm thấy PetInventory.", "error")
-        return false
-    end
-    local pet = pet_inventory:FindFirstChild(pet_name)
-    if not pet then
-        log_message(string.format("Trade Pet: Không tìm thấy pet %s.", pet_name), "error")
-        return false
-    end
-    local receiver = Players:FindFirstChild(receiver_name)
-    if not receiver then
-        log_message(string.format("Trade Pet: Không tìm thấy người chơi %s.", receiver_name), "error")
-        return false
-    end
-    log_message(string.format("Trade Pet: Bắt đầu giao dịch pet %s tới %s.", pet_name, receiver_name), "info")
-    trade_status = "Trading"
-    local trade_success = false
-    local trade_attempts = 0
-    while trade_attempts < _G.UserConfig.RetryAttempts and not trade_success do
-        trade_attempts = trade_attempts + 1
-        local trade_ui = LocalPlayer.PlayerGui:FindFirstChild("TradeUI") or game.Workspace:FindFirstChild("TradeUI")
-        if trade_ui then
-            local pet_slot = trade_ui:FindFirstChild("PetSlot")
-            if pet_slot then
-                pet_slot:Invoke("AddPet", pet)
-                wait(_G.UserConfig.TradeWaitDelay)
-                local confirm_button = trade_ui:FindFirstChild("ConfirmButton")
-                if confirm_button then
-                    confirm_button:Activate()
-                    trade_success = true
-                    log_message(string.format("Đã gửi pet %s thành công tới %s.", pet_name, receiver_name), "success")
-                    send_trade_status("success", pet_name, receiver_name, "Đã gửi yêu cầu.")
-                else
-                    log_message("Trade Pet: Không tìm thấy ConfirmButton.", "error")
-                    send_trade_status("failed", pet_name, receiver_name, "Không tìm thấy ConfirmButton.")
-                end
-            else
-                log_message("Trade Pet: Không tìm thấy PetSlot.", "error")
-                send_trade_status("failed", pet_name, receiver_name, "Không tìm thấy PetSlot.")
-            end
-        else
-            log_message("Trade Pet: Không tìm thấy Trade UI.", "error")
-            send_trade_status("failed", pet_name, receiver_name, "Không tìm thấy Trade UI.")
-        end
-        if not trade_success then
-            wait(_G.UserConfig.RetryDelay)
+-- Get Config
+local function get_config_from_app()
+    local url = APP_SERVER_URL .. "/fetch_config"
+    local success, response_body, status_code = perform_http_request("POST", url, { ["Content-Type"] = "application/json" }, HttpService:JSONEncode({ account = ACCOUNT_NAME }))
+    if success and type(response_body) == "string" then
+        local decode_success, data = pcall(HttpService.JSONDecode, HttpService, response_body)
+        if decode_success and type(data) == "table" and data.status == "success" and type(data.config) == "table" then
+            return data.config
         end
     end
-    trade_status = "Idle"
-    return trade_success
+    return nil
 end
 
 -- Main Loop
-local function main_loop()
-    while true do
-        if not is_fetching then
-            is_fetching = true
-            local success, config_data = http_request("POST", "/fetch_config", { account = LocalPlayer.Name })
-            if success and config_data.status == "success" then
-                local config = config_data.config
-                script_status = "Online"
-                status_label.TextColor3 = Color3.fromRGB(0, 255, 0)
-                status_label.Text = "Script: Online"
-                attempted_job_ids = {}
-                local job_id = config.job_id_to_join
-                if config.operation_mode == "receive_pet" then
-                    log_message("Chế độ: Nhận Pet. Đang gửi Job ID và chờ giao dịch.", "info")
-                    send_job_id()
-                    if job_id and job_id ~= "" then
-                        local teleport_success = false
-                        local teleport_attempts = 0
-                        while not teleport_success and teleport_attempts < _G.UserConfig.MaxTeleportRetries do
-                            teleport_success = join_server_by_job_id(job_id)
-                            if not teleport_success then
-                                log_message("Yêu cầu Job ID mới vì server đầy hoặc lỗi.", "warning")
-                                wait(_G.UserConfig.RetryDelay)
-                                success, config_data = http_request("POST", "/fetch_config", { account = LocalPlayer.Name })
-                                if success and config_data.status == "success" then
-                                    job_id = config_data.config.job_id_to_join
-                                else
-                                    log_message("Lỗi khi lấy Job ID mới.", "error")
-                                    break
-                                end
-                            end
-                            teleport_attempts = teleport_attempts + 1
-                        end
-                        if teleport_success then
-                            auto_accept_trade(_G.UserConfig.AutoAcceptTimeout)
-                        end
-                    else
-                        log_message("Không có Job ID để teleport.", "warning")
-                        status_label.Text = "Script: No Job ID available."
-                    end
-                elseif config.operation_mode == "trade_pet" then
-                    log_message("Chế độ: Gửi Pet. Chuẩn bị teleport và giao dịch.", "info")
-                    if job_id and job_id ~= "" then
-                        local teleport_success = false
-                        local teleport_attempts = 0
-                        while not teleport_success and teleport_attempts < _G.UserConfig.MaxTeleportRetries do
-                            teleport_success = join_server_by_job_id(job_id)
-                            if not teleport_success then
-                                log_message("Yêu cầu Job ID mới vì server đầy hoặc lỗi.", "warning")
-                                wait(_G.UserConfig.RetryDelay)
-                                success, config_data = http_request("POST", "/fetch_config", { account = LocalPlayer.Name })
-                                if success and config_data.status == "success" then
-                                    job_id = config_data.config.job_id_to_join
-                                else
-                                    log_message("Lỗi khi lấy Job ID mới.", "error")
-                                    break
-                                end
-                            end
-                            teleport_attempts = teleport_attempts + 1
-                        end
-                        if teleport_success then
-                            wait(_G.UserConfig.TeleportOffset)
-                            for _, pet_name in ipairs(config.pets_to_trade_for_this_account) do
-                                trade_pet(pet_name, config.receiver_account_name)
-                            end
-                        end
-                    else
-                        log_message("Không có Job ID để teleport.", "warning")
-                        status_label.Text = "Script: No Job ID available."
-                    end
-                else
-                    log_message("Chế độ: Idle.", "info")
-                    script_status = "Idle"
-                    status_label.Text = "Script: Idle"
-                end
-            else
-                script_status = "Connection Failed"
-                status_label.TextColor3 = Color3.fromRGB(255, 0, 0)
-                status_label.Text = "Script: Connection Failed"
-                log_message("Lỗi kết nối App Server.", "error")
-            end
-            is_fetching = false
-        end
-        send_pet_data()
-        wait(_G.UserConfig.UpdateInterval)
-    end
-end
+task.spawn(function()
+    setup_status_gui()
+    update_status_text("Connecting...", Color3.new(1, 1, 0))
+    start_auto_accept_listener()
 
--- Start Script
-local success, error_msg = pcall(main_loop)
-if not success then
-    log_message(string.format("Lỗi chính trong script: %s", error_msg), "error")
-    status_label.TextColor3 = Color3.fromRGB(255, 0, 0)
-    status_label.Text = "Script: Crashed"
-end
+    while true do
+        local config = nil
+        local current_connection_success = false
+        for attempt = 1, has_connected_to_app_successfully and RETRY_ATTEMPTS or 1 do
+            config = get_config_from_app()
+            if config then
+                current_connection_success = true
+                has_connected_to_app_successfully = true
+                update_status_text("Online", Color3.new(0, 1, 0))
+                break
+            end
+            task.wait(RETRY_DELAY)
+        end
+
+        if not current_connection_success then
+            if has_connected_to_app_successfully then
+                update_status_text("Offline (Kicked)", Color3.new(1, 0, 0))
+                LocalPlayer:Kick("App đã bị đóng hoặc mất kết nối.")
+                break
+            else
+                update_status_text("No App Connection", Color3.new(1, 0.5, 0))
+            end
+        else
+            sendPetDataToApp()
+            if config.operation_mode == "receive_pet" then
+                sendJobIdToApp()
+            elseif config.operation_mode == "trade_pet" then
+                if config.job_id_to_join and config.job_id_to_join ~= "" then
+                    join_server_by_job_id(config.job_id_to_join)
+                    task.wait(10)
+                end
+                if #config.pets_to_trade_for_this_account > 0 then
+                    for _, pet_name in ipairs(config.pets_to_trade_for_this_account) do
+                        givePet(pet_name, config.receiver_account_name)
+                        task.wait(_G.UserConfig.TradeWaitDelay)
+                    end
+                end
+            end
+        end
+        task.wait(UPDATE_INTERVAL)
+    end
+end)
