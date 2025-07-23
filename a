@@ -1,3 +1,4 @@
+-- ok
 _G.UserConfig = {
     AppServerIP = "14.226.80.56",
     AppServerPort = 5000,
@@ -9,7 +10,7 @@ _G.UserConfig = {
     TeleportOffset = 5,
     DefaultPlaceId = "126884695634066",
     TeleportCooldown = 15,
-    MaxTeleportRetries = 3  -- New config for max retries on full server
+    MaxTeleportRetries = 3
 }
 
 -- Services
@@ -26,7 +27,7 @@ local server_url = string.format("http://%s:%d", _G.UserConfig.AppServerIP, _G.U
 local script_status = "Connecting..."
 local is_fetching = false
 local trade_status = "Idle"
-local attempted_job_ids = {}  -- Track attempted Job IDs to avoid retrying the same one
+local attempted_job_ids = {}
 
 -- GUI Setup
 local function create_gui()
@@ -57,15 +58,15 @@ local status_label = create_gui()
 -- Logging Function
 local function log_message(message, level)
     print(string.format("[LOG %s] %s", level:upper(), message))
-    local text_color = Color3.fromRGB(255, 255, 255) -- White for info
+    local text_color = Color3.fromRGB(255, 255, 255)
     if level:lower() == "error" then
-        text_color = Color3.fromRGB(255, 0, 0) -- Red for error
+        text_color = Color3.fromRGB(255, 0, 0)
     elseif level:lower() == "success" then
-        text_color = Color3.fromRGB(0, 255, 0) -- Green for success
+        text_color = Color3.fromRGB(0, 255, 0)
     elseif level:lower() == "warning" then
-        text_color = Color3.fromRGB(255, 165, 0) -- Orange for warning
+        text_color = Color3.fromRGB(255, 165, 0)
     elseif level:lower() == "debug" then
-        text_color = Color3.fromRGB(128, 128, 128) -- Gray for debug
+        text_color = Color3.fromRGB(128, 128, 128)
     end
     status_label.TextColor3 = text_color
     status_label.Text = string.format("Script: %s", message)
@@ -91,6 +92,19 @@ local function http_request(method, endpoint, data)
         local error_msg = response and response.StatusMessage or "Unknown error"
         log_message(string.format("Lỗi %s %s: %s", method, endpoint, error_msg), "error")
         return false, nil
+    end
+end
+
+-- Report Failed Job ID
+local function report_job_failure(job_id)
+    local data = { job_id = job_id }
+    local success, response = http_request("POST", "/report_job_failure", data)
+    if success then
+        log_message(string.format("Đã báo cáo Job ID %s thất bại.", job_id), "info")
+        return true
+    else
+        log_message(string.format("Lỗi khi báo cáo Job ID %s thất bại.", job_id), "error")
+        return false
     end
 end
 
@@ -179,8 +193,9 @@ local function join_server_by_job_id(job_id)
         return true
     else
         if string.find(tostring(result), "full") or string.find(tostring(result), "capacity") then
-            log_message(string.format("Join Server: Server với Job ID %s đầy, yêu cầu Job ID mới.", job_id), "warning")
-            attempted_job_ids[#attempted_job_ids] = nil  -- Remove failed Job ID to allow retrying later
+            log_message(string.format("Join Server: Server với Job ID %s đầy, báo cáo thất bại.", job_id), "warning")
+            report_job_failure(job_id)
+            attempted_job_ids[#attempted_job_ids] = nil
             return false
         else
             log_message(string.format("Join Server: Lỗi khi teleport: %s", result), "error")
@@ -296,7 +311,7 @@ local function main_loop()
                 script_status = "Online"
                 status_label.TextColor3 = Color3.fromRGB(0, 255, 0)
                 status_label.Text = "Script: Online"
-                attempted_job_ids = {}  -- Reset attempted Job IDs for new fetch
+                attempted_job_ids = {}
                 local job_id = config.job_id_to_join
                 if config.operation_mode == "receive_pet" then
                     log_message("Chế độ: Nhận Pet. Đang gửi Job ID và chờ giao dịch.", "info")
