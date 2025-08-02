@@ -762,6 +762,7 @@ spawn(function()
                     for i, v in getplace().Important.Plant_Locations:GetChildren() do
                         if not foundAny then
                             if #getplace().Important.Plants_Physical:GetChildren() < getgenv().DonaldConfig["Limit Tree"] then
+                                print("Calling haveseed()")
                                 local seed = haveseed()
                                 seed.Parent = plr.Character
                                 local arguments = {
@@ -1397,8 +1398,6 @@ spawn(function()
         game:GetService("ReplicatedStorage"):WaitForChild("GameEvents"):WaitForChild("CraftingGlobalObjectService")
             :FireServer(unpack(args))
         task.wait(3)
-        local args = {"Claim", workspace:WaitForChild("DinoEvent"):WaitForChild("DinoCraftingTable"),
-                      "DinoEventWorkbench", 1}
         game:GetService("ReplicatedStorage"):WaitForChild("GameEvents"):WaitForChild("CraftingGlobalObjectService")
             :FireServer(unpack(args))
 
