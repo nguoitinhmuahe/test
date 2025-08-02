@@ -1,18 +1,4 @@
-repeat
-    wait()
-until game:IsLoaded()
-repeat
-    wait()
-until game.Players.LocalPlayer.Character
-repeat
-    wait()
-    game:GetService("VirtualUser"):CaptureController()
-    game:GetService("VirtualUser"):Button1Down(Vector2.new(0, 0))
-until game.Players.LocalPlayer:GetAttribute("DataFullyLoaded") and
-    game.Players.LocalPlayer:GetAttribute("Finished_Loading")
-repeat
-    wait()
-until game.CoreGui
+
 
 
 if not getgenv().DonaldConfig then
