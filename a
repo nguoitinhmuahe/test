@@ -1,4 +1,4 @@
-print("STAâRT")
+print("START")
 local supportedExecutors = {
     "Delta", "Arceus", "Fluxus", "Codex", "Cryptic", "Krnl", "Wave", "Volcano",
     "AWP", "Seliware", "Swift", "Argon", "TNG", "Ronix", "Potassium", "Trigon", "FortWare"
@@ -517,7 +517,7 @@ coroutine.wrap(function()
 
     for _, sN in ipairs(SORTED_SEED_SHOP_ITEM_KEYS_KAITUN) do createSeedItemToggleBtn_New(seedSelScroll,sN,seedBuyOrder); seedBuyOrder = seedBuyOrder + 1; updateLoadingProgress() end
 
-    local function createGenericItemToggleBtn(p,iN,cT_configTable,cK_configKey,o) local b=Instance.new("TextButton",p); b.Name=iN:gsub("%s+","").."Toggle"; b.LayoutOrder=o; b.Size=UDim2.new(1,-4,0,22); b.Font=Enum.Font.Gotham; b.TextSize=12; Instance.new("UICorner",b).CornerRadius=UDim.new(0,4); local function updVis() if cT_configTable[cK_configKey] then b.Text=iN.." [ON]"; b.BackgroundColor3=kaitunColors.ElementHover; b.TextColor3=kaitunColors.StatusOn else b.Text=iN.." [OFF]"; b.BackgroundColor3=kaitunColors.ElementBackground; b.TextColor3=kaitunColors.StatusOff end end b.MouseButton1Click:Connect(function() cT_configTable[cK_configKey]=not cT_configTable[cK_configKey]; updVis(); saveConfig_Kaitun() end) updVis(); return b end
+local function createGenericItemToggleBtn(p,iN,cT_configTable,cK_configKey,o) if not cT_configTable then cT_configTable={} end if cT_configTable[cK_configKey]==nil then cT_configTable[cK_configKey]=false end local b=Instance.new("TextButton",p); b.Name=iN:gsub("%s+","").."Toggle"; b.LayoutOrder=o; b.Size=UDim2.new(1,-4,0,22); b.Font=Enum.Font.Gotham; b.TextSize=12; Instance.new("UICorner",b).CornerRadius=UDim.new(0,4); local function updVis() if cT_configTable[cK_configKey] then b.Text=iN.." [ON]"; b.BackgroundColor3=kaitunColors.ElementHover; b.TextColor3=kaitunColors.StatusOn else b.Text=iN.." [OFF]"; b.BackgroundColor3=kaitunColors.ElementBackground; b.TextColor3=kaitunColors.StatusOff end end b.MouseButton1Click:Connect(function() cT_configTable[cK_configKey]=not cT_configTable[cK_configKey]; updVis(); saveConfig_Kaitun() end) updVis(); return b end
     local gO=0; for gN,_ in pairs(SHOP_TOOL_MAP_KAITUN) do gO=gO+1; createGenericItemToggleBtn(gearSelScroll,gN,Config.SelectedGearToBuy,gN,gO); updateLoadingProgress() end
     local hO=0; for _,iN in ipairs(HONEY_EVENT_ITEM_NAMES_KAITUN) do hO=hO+1; createGenericItemToggleBtn(honeySelScroll,iN,Config.SelectedHoneyShopItemsToBuy,iN,hO); updateLoadingProgress() end
     local dO=0; for pN,_ in pairs(DonaldConfigDefaults.PlantsToDestroy) do createGenericItemToggleBtn(destroySelScroll,pN,Config.PlantsToDestroy,pN,dO); updateLoadingProgress() end
