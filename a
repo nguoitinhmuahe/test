@@ -106,11 +106,7 @@ end
 
 local Webhook = getgenv().DonaldConfig["Webhook Mode"]["Url"]
 
-if not LPH_OBFUSCATED then
-    getfenv().LPH_NO_VIRTUALIZE = function(f)
-        return f
-    end
-end
+
 local spawnegg = false
 
 getgenv().Loaded = true
