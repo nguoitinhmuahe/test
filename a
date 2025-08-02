@@ -1,4 +1,4 @@
-print("START")
+print("124START")
 local supportedExecutors = {
     "Delta", "Arceus", "Fluxus", "Codex", "Cryptic", "Krnl", "Wave", "Volcano",
     "AWP", "Seliware", "Swift", "Argon", "TNG", "Ronix", "Potassium", "Trigon", "FortWare"
@@ -701,9 +701,18 @@ end
 function findPlantToDestroy() if not MyFarm or not MyFarm.Parent then return nil end local pP=MyFarm.Important:FindFirstChild("Plants_Physical") if not pP then return nil end local dL=Config.PlantsToDestroy or {} for _,pI in pairs(pP:GetChildren()) do if dL[pI.Name]==true then return pI end end return nil end
 function getFruitCount()
     local count = 0
+    local function checkCrop(itemName)
+        for cropName, _ in pairs(Config) do
+            if string.find(itemName:lower(), cropName:lower()) then
+                return true
+            end
+        end
+        return false
+    end
+
     if Backpack then
         for _, item in pairs(Backpack:GetChildren()) do
-            if item:IsA("Tool") and not string.find(item.Name:lower(), "seed") and not string.find(item.Name:lower(), "shovel") and not string.find(item.Name:lower(), "pollinated") then
+            if item:IsA("Tool") and checkCrop(item.Name) then
                 count = count + 1
                 print("[Debug] Counted fruit in Backpack:", item.Name)
             end
@@ -711,7 +720,7 @@ function getFruitCount()
     end
     if Character then
         for _, item in pairs(Character:GetChildren()) do
-            if item:IsA("Tool") and not string.find(item.Name:lower(), "seed") and not string.find(item.Name:lower(), "shovel") and not string.find(item.Name:lower(), "pollinated") then
+            if item:IsA("Tool") and checkCrop(item.Name) then
                 count = count + 1
                 print("[Debug] Counted fruit in Character:", item.Name)
             end
