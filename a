@@ -1,4 +1,4 @@
-print("STARTaaa")
+print("START")
 local supportedExecutors = {
     "Delta", "Arceus", "Fluxus", "Codex", "Cryptic", "Krnl", "Wave", "Volcano",
     "AWP", "Seliware", "Swift", "Argon", "TNG", "Ronix", "Potassium", "Trigon", "FortWare"
@@ -1173,7 +1173,7 @@ local function extract_pet_name(tool_name)
 end
 
 local function is_pet_whitelisted(pet_name)
-    local config = getgenv().Config
+    local config = getgenv().DonaldConfig
     if not config or not config["Pet"] or not config["Pet"]["Name Pet"] then
         return false -- Nếu không có danh sách whitelist => coi như không whitelist
     end
