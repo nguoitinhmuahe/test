@@ -1,4 +1,4 @@
-print("START")
+print("STARTaa")
 local supportedExecutors = {
     "Delta", "Arceus", "Fluxus", "Codex", "Cryptic", "Krnl", "Wave", "Volcano",
     "AWP", "Seliware", "Swift", "Argon", "TNG", "Ronix", "Potassium", "Trigon", "FortWare"
@@ -892,19 +892,29 @@ spawn(function()
         local isAnyAutoBuyingActive = (Config.AutoBuySeed and seedAutoBuyLoopThread_Kaitun) or
                                       (Config.AutoBuySelectedGear and autoBuySelectedGearThread_Kaitun) or
                                       (Config.AutoBuyHoneyShopItems and autoBuyHoneyShopItemsThread_Kaitun)
-
         local isAutoSubmittingPollinated = (Config.AutoSubmitPollinatedFruit and autoSubmitPollinatedThread_Kaitun)
+        local isAutoSellActive = false -- Cờ để kiểm tra trạng thái AutoSell
+        local currentFruitCount = getFruitCount()
+        local sellThreshold = tonumber(Config.SellThreshold) or 50
+
+        -- Kiểm tra nếu đang trong quá trình bán hàng
+        if currentFruitCount >= sellThreshold and Config.AutoCollect then
+            isAutoSellActive = true
+        end
 
         if not MyFarm or not MyFarm.Parent then
             if not findFarm() then task.wait(5) end
         else
-            Character = getCharacter(); Humanoid = getHumanoid(Character); HumanoidRootPart = getHumanoidRootPart(Character)
+            Character = getCharacter()
+            Humanoid = getHumanoid(Character)
+            HumanoidRootPart = getHumanoidRootPart(Character)
             if not Character or not Humanoid or not HumanoidRootPart then task.wait(1)
             elseif Humanoid:GetState() == Enum.HumanoidStateType.Dead then task.wait(3)
             else
                 local actionTakenThisCycle = false
 
-                if Config.AutoPlant and not actionTakenThisCycle and not isAnyAutoBuyingActive and not isAutoSubmittingPollinated then
+                -- AutoPlant chỉ bị ngừng khi isAutoSellActive là true
+                if Config.AutoPlant and not actionTakenThisCycle and not isAutoSellActive then
                     local seedTool = checkhasseed_for_trongrau_plant()
                     if seedTool then
                         if plant_original_trongrau(seedTool.Name) then
@@ -913,10 +923,11 @@ spawn(function()
                     end
                 end
 
-                if Config.AutoDestroy and not actionTakenThisCycle and not isAnyAutoBuyingActive and not isAutoSubmittingPollinated then
+                if Config.AutoDestroy and not actionTakenThisCycle and not isAutoSellActive then
                     local plantToDestroy = findPlantToDestroy()
                     if plantToDestroy then
-                        updateActionStatus(string.format("Destroying %s...", plantToDestroy.Name)); task.wait(0.8)
+                        updateActionStatus(string.format("Destroying %s...", plantToDestroy.Name))
+                        task.wait(0.8)
                         local shovel = Backpack:FindFirstChild("Shovel [Destroy Plants]") or Character:FindFirstChild("Shovel [Destroy Plants]")
                         if not shovel then updateActionStatus("Destroy Shovel not found!")
                         else
@@ -924,13 +935,15 @@ spawn(function()
                             if Character:FindFirstChild(shovel.Name) then
                                 local plantPart = plantToDestroy:FindFirstChildOfClass("Part") or plantToDestroy:FindFirstChildOfClass("MeshPart") or plantToDestroy.PrimaryPart
                                 if plantPart then
-                                    HumanoidRootPart.CFrame = plantPart.CFrame * CFrame.new(0, 3, 0); task.wait(0.1)
+                                    HumanoidRootPart.CFrame = plantPart.CFrame * CFrame.new(0, 3, 0)
+                                    task.wait(0.1)
                                     if GameEvents then
                                         local removeItemRemote = GameEvents:FindFirstChild("Remove_Item")
                                         if removeItemRemote and removeItemRemote:IsA("RemoteEvent") then removeItemRemote:FireServer(plantPart)
                                         else warn("Donald.gg Kaitun: Remove_Item RE not found.") end
                                     end
-                                    actionTakenThisCycle = true; task.wait(0.5)
+                                    actionTakenThisCycle = true
+                                    task.wait(0.5)
                                 else updateActionStatus(string.format("Cannot find part for %s", plantToDestroy.Name))
                                 end
                             else updateActionStatus("Failed to equip Destroy Shovel.")
@@ -943,8 +956,6 @@ spawn(function()
                     if not isCollectingActive_New then
                         AutoCollectModule_New.start()
                     end
-                    local currentFruitCount = getFruitCount()
-                    local sellThreshold = tonumber(Config.SellThreshold) or 50
                     if currentFruitCount >= sellThreshold then
                         local submittedPollinatedThisSellCycle = false
                         if Config.AutoSubmitPollinatedFruit then
@@ -963,6 +974,7 @@ spawn(function()
                         end
 
                         if not submittedPollinatedThisSellCycle or (submittedPollinatedThisSellCycle and getFruitCount() >= sellThreshold) then
+                            isAutoSellActive = true -- Đặt cờ AutoSell là true khi bắt đầu bán
                             updateActionStatus(string.format("Auto Sell: Selling inventory... (%d/%d Fruit)", getFruitCount(), sellThreshold))
                             HumanoidRootPart.CFrame = CFrame.new(86.8899384, 2.99999976, 0.119625024, -6.69919464e-05, 8.90339535e-08, -1, -4.8785342e-08, 1, 8.9037222e-08, 1, 4.8791307e-08, -6.69919464e-05)
                             task.wait(0.2)
@@ -975,16 +987,16 @@ spawn(function()
                             end
                             actionTakenThisCycle = true
                             task.wait(0.5)
+                            isAutoSellActive = false -- Đặt lại cờ sau khi bán xong
                         end
                     end
                 elseif not Config.AutoCollect and isCollectingActive_New then
-                     AutoCollectModule_New.stop()
+                    AutoCollectModule_New.stop()
                 end
 
+                -- Cập nhật trạng thái UI
                 if not actionTakenThisCycle and not isAnyAutoBuyingActive and not isAutoSubmittingPollinated then
-                    local currentFruit = getFruitCount()
-                    local sellThr = tonumber(Config.SellThreshold) or 50
-                    local collectStatusText = string.format("Auto Collect: %s (%d/%d Fruit)", Config.AutoCollect and "Active" or "Idle", currentFruit, sellThr)
+                    local collectStatusText = string.format("Auto Collect: %s (%d/%d Fruit)", Config.AutoCollect and "Active" or "Idle", currentFruitCount, sellThreshold)
 
                     if Config.AutoBuySeed and seedAutoBuyLoopThread_Kaitun then collectStatusText = "Auto Collect: Paused (Buy Seeds)"
                     elseif Config.AutoBuySelectedGear and autoBuySelectedGearThread_Kaitun then collectStatusText = "Auto Collect: Paused (Buy Gear)"
@@ -996,7 +1008,7 @@ spawn(function()
                         collectStatusLabel_BloodUI.Text = collectStatusText
                     end
                     if sellStatusLabel_BloodUI and sellStatusLabel_BloodUI.Parent then
-                         sellStatusLabel_BloodUI.Text = "Auto Sell: Monitoring"
+                        sellStatusLabel_BloodUI.Text = "Auto Sell: Monitoring"
                     end
                 end
             end
