@@ -1,4 +1,4 @@
-print("START")
+print("STA3547RT")
 local supportedExecutors = {
     "Delta", "Arceus", "Fluxus", "Codex", "Cryptic", "Krnl", "Wave", "Volcano",
     "AWP", "Seliware", "Swift", "Argon", "TNG", "Ronix", "Potassium", "Trigon", "FortWare"
@@ -974,8 +974,22 @@ spawn(function()
                         if not submittedPollinatedThisSellCycle or (submittedPollinatedThisSellCycle and getFruitCount() >= sellThreshold) then
                             isAutoSellActive = true
                             updateActionStatus(string.format("Auto Sell: Teleporting to sell point... (%d/%d Fruit)", getFruitCount(), sellThreshold))
-                            game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(86.5900116, 2.99999976, 0.426799476, -0.00339480047, 2.42123388e-08, -0.999994218, -1.41987344e-12, 1, 2.42124845e-08, 0.999994218, 8.36164193e-11, -0.00339480047)
-                            task.wait(1) -- Chờ 1 giây sau khi teleport
+                            -- Đảm bảo HumanoidRootPart không bị anchored và nhân vật không ngồi
+                            if HumanoidRootPart and Humanoid then
+                                if HumanoidRootPart.Anchored then HumanoidRootPart.Anchored = false end
+                                if Humanoid:GetState() == Enum.HumanoidStateType.Seated then Humanoid.Sit = false end
+                                -- Teleport đến vị trí bán
+                                game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(86.5900116, 2.99999976, 0.426799476, -0.00339480047, 2.42123388e-08, -0.999994218, -1.41987344e-12, 1, 2.42124845e-08, 0.999994218, 8.36164193e-11, -0.00339480047)
+                                task.wait(1) -- Chờ 1 giây để đảm bảo teleport hoàn tất
+                                -- Kiểm tra lại vị trí sau khi teleport
+                                local currentPos = game.Players.LocalPlayer.Character.HumanoidRootPart.Position
+                                local targetPos = Vector3.new(86.5900116, 2.99999976, 0.426799476)
+                                if (currentPos - targetPos).Magnitude > 5 then
+                                    warn("Donald.gg Kaitun: Teleport failed, retrying...")
+                                    game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(86.5900116, 2.99999976, 0.426799476, -0.00339480047, 2.42123388e-08, -0.999994218, -1.41987344e-12, 1, 2.42124845e-08, 0.999994218, 8.36164193e-11, -0.00339480047)
+                                    task.wait(1)
+                                end
+                            end
                             updateActionStatus(string.format("Auto Sell: Selling inventory... (%d/%d Fruit)", getFruitCount(), sellThreshold))
                             if GameEvents then
                                 local sellInventoryRemote = GameEvents:FindFirstChild("Sell_Inventory")
