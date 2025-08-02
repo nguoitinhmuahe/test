@@ -1,3 +1,4 @@
+-- hmmm
 repeat
     wait()
 until game:IsLoaded()
@@ -642,14 +643,57 @@ spawn(function()
             local destroyMode = DonaldConfig["Destroy Mode"]
             local autoDestroy = destroyMode["Auto Destroy when have money"]
             local modeDestroy = destroyMode["Mode Destroy"]
-            local seedLimit = DonaldConfig["Seed"][seedName]
+            local seedLimitValue = DonaldConfig["Seed"][seedName]
             local currentCount = cnt(seedName)
             local seedData = dataseed[seedName]
             local price = seedData.Price
             local rarity = seedData.Rarity
             local canAfford = sheckles.Value >= price
 
-            local shouldBuy = seedLimit and currentCount < seedLimit and canAfford
+            local shouldBuy = false
+            if DonaldConfig["Mode Plant"] == "Auto" then
+                shouldBuy = canAfford and (#getplace().Important.Plants_Physical:GetChildren() < DonaldConfig["Limit Tree"])
+            else -- Khi Mode Plant là "Custom"
+                local actualSeedLimit = 0
+                if type(seedLimitValue) == "number" then
+                    actualSeedLimit = seedLimitValue
+                elseif seedLimitValue == true then
+                    actualSeedLimit = DonaldConfig["Limit Tree"]
+                end
+                shouldBuy = (actualSeedLimit > 0 and currentCount < actualSeedLimit and canAfford)
+            end
+
+            local skipBuy = false
+            if modeDestroy == "Auto" and math.floor(game:GetService("Players").LocalPlayer.leaderstats.Sheckles.Value) >=
+                getgenv().DonaldConfig["Destroy Mode"]["Auto Destroy when have money"] then
+                if table.find(destroyMode["Rarity Destroy Auto"], rarity) then
+                    skipBuy = true
+                end
+            elseif modeDestroy == "Custom" and
+                math.floor(game:GetService("Players").LocalPlayer.leaderstats.Sheckles.Value) >=
+                getgenv().DonaldConfig["Destroy Mode"]["Auto Destroy when have money"] then
+                if table.find(destroyMode["Trees"], seedName) then
+                    skipBuy = true
+                end
+            end
+
+            local shouldAutoDestroy = not autoDestroy or (math.floor(sheckles.Value) < autoDestroy and autoDestroy)
+
+            if shouldAutoDestroy then
+                if shouldBuy and not skipBuy then
+                    table.insert(ahihi, {
+                        Price = price,
+                        Seed = seedName,
+                        Stock = stockCount
+                    })
+                end
+            elseif not skipBuy and shouldBuy then
+                table.insert(ahihi, {
+                    Price = price,
+                    Seed = seedName,
+                    Stock = stockCount
+                })
+            end
 
             local skipBuy = false
 
