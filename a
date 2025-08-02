@@ -1,4 +1,4 @@
-print("START")
+print("STARTaaa")
 local supportedExecutors = {
     "Delta", "Arceus", "Fluxus", "Codex", "Cryptic", "Krnl", "Wave", "Volcano",
     "AWP", "Seliware", "Swift", "Argon", "TNG", "Ronix", "Potassium", "Trigon", "FortWare"
@@ -1173,7 +1173,12 @@ local function extract_pet_name(tool_name)
 end
 
 local function is_pet_whitelisted(pet_name)
-    for _, allowed in ipairs(getgenv().Config["Pet"]["Name Pet"]) do
+    local config = getgenv().Config
+    if not config or not config["Pet"] or not config["Pet"]["Name Pet"] then
+        return false -- Nếu không có danh sách whitelist => coi như không whitelist
+    end
+
+    for _, allowed in ipairs(config["Pet"]["Name Pet"]) do
         if pet_name == allowed then
             return true
         end
@@ -1186,7 +1191,9 @@ local function get_pet_tools()
     for _, tool in ipairs(LocalPlayer.Backpack:GetChildren()) do
         if tool:IsA("Tool") and string.find(tool.Name, "%[") then
             local pet_name = extract_pet_name(tool.Name)
-            table.insert(pets, {tool = tool, name = pet_name})
+            if pet_name then
+                table.insert(pets, {tool = tool, name = pet_name})
+            end
         end
     end
     return pets
@@ -1194,21 +1201,22 @@ end
 
 local function auto_sell_non_whitelist_pets()
     local pet_tools = get_pet_tools()
+    if not pet_tools then return end
 
     for _, pet in ipairs(pet_tools) do
-        if not is_pet_whitelisted(pet.name) then
-            warn("[AutoSell] Bán pet:", pet.name)
-            pet.tool.Parent = Character
-            task.wait(0.2)
-            SellEvent:FireServer()
-            task.wait(0.5)
-        else
-            print("[AutoSell] Giữ lại pet:", pet.name)
+        if pet and pet.name and pet.tool then
+            if not is_pet_whitelisted(pet.name) then
+                warn("[AutoSell] Bán pet:", pet.name)
+                pet.tool.Parent = Character
+                task.wait(0.2)
+                SellEvent:FireServer()
+                task.wait(0.5)
+            else
+                print("[AutoSell] Giữ lại pet:", pet.name)
+            end
         end
     end
 end
-
-
 
 task.spawn(function()
     while true do
@@ -1217,5 +1225,5 @@ task.spawn(function()
     end
 end)
 
+-- Giữ dòng return như cũ nếu cần trong module
 return AutoBuyEggModule
-
