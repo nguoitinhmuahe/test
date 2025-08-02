@@ -738,27 +738,71 @@ spawn(function()
     pcall(function()
         while wait() do
             pcall(function()
-                if not haveseed() then
+                print("Plant Loop: Top of loop.") -- DEBUG
+                local currentPlantsCount = #getplace().Important.Plants_Physical:GetChildren() -- DEBUG
+                local limitTree = getgenv().DonaldConfig["Limit Tree"] -- DEBUG
+                print("Plant Loop: Current plants: " .. currentPlantsCount .. " / Limit Tree: " .. limitTree .. ".") -- DEBUG
 
+                if currentPlantsCount >= limitTree then -- NẾU ĐÃ ĐẠT GIỚI HẠN CÂY
+                    print("Plant Loop: Limit Tree reached. Not planting.") -- DEBUG
+                    return -- Không làm gì nữa trong vòng lặp này
+                end
+
+                local seedToPlant = haveseed()
+                print("Plant Loop: haveseed() returned: " .. tostring(seedToPlant) .. ".") -- DEBUG
+
+                if not seedToPlant then -- Nếu không tìm thấy hạt giống
+                    print("Plant Loop: No suitable seed found in inventory.") -- DEBUG
                 else
+                    print("Plant Loop: Seed found: " .. seedToPlant:GetAttribute(invobf["ItemName"]) .. ". Looking for plant location.") -- DEBUG
+                    
                     for i, v in getplace().Important.Plant_Locations:GetChildren() do
-                        if not foundAny then
-                            if #getplace().Important.Plants_Physical:GetChildren() < getgenv().DonaldConfig["Limit Tree"] then
-                                print("Calling haveseed()")
-                                local seed = haveseed()
-                                seed.Parent = plr.Character
-                                local arguments = {
-                                    [1] = v.Position,
-                                    [2] = seed:GetAttribute(invobf["ItemName"])
-                                }
-                                if plr:DistanceFromCharacter(v.Position) > 100 and not startsellpet then
-                                    game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame = getplace().Center_Point
-                                                                                                     .CFrame
-                                end
-                                getgenv().ContentSet("Plant Fruits: " .. seed:GetAttribute(invobf["ItemName"]))
-                                game.ReplicatedStorage.GameEvents.Plant_RE:FireServer(unpack(arguments))
-                            end
+                        print("Plant Loop: Checking plant location " .. i .. ".") -- DEBUG
+                        
+                        -- KIỂM TRA foundAny (cờ từ chức năng hủy cây)
+                        if foundAny then
+                            print("Plant Loop: foundAny is true. Skipping plant for this iteration.") -- DEBUG
+                             -- Bỏ qua vị trí này nếu foundAny đang chặn
                         end
+
+                        -- KIỂM TRA startsellpet (cờ từ chức năng bán pet)
+                        if startsellpet then
+                            print("Plant Loop: startsellpet is true. Skipping plant for this iteration.") -- DEBUG
+                             -- Bỏ qua vị trí này nếu startsellpet đang chặn
+                        end
+
+                        -- Kiểm tra lại Limit Tree ngay trước khi plant (phòng trường hợp nhiều luồng)
+                        if #getplace().Important.Plants_Physical:GetChildren() >= limitTree then
+                            print("Plant Loop: Limit Tree reached while iterating locations. Stopping plant attempts.") -- DEBUG
+                            break -- Thoát khỏi vòng lặp Plant_Locations
+                        end
+
+                        -- Nếu đến đây, có hạt giống, có chỗ trống lý thuyết, và không bị chặn bởi cờ
+                        -- Bắt đầu logic trồng cây
+                        print("Plant Loop: Proceeding to plant.") -- DEBUG
+
+                        seedToPlant.Parent = plr.Character
+                        task.wait(0.1) -- Đợi một chút sau khi chuyển parent (có thể cần cho game)
+
+                        local arguments = {
+                            [1] = v.Position,
+                            [2] = seedToPlant:GetAttribute(invobf["ItemName"])
+                        }
+                        
+                        -- Di chuyển người chơi nếu cần
+                        if plr:DistanceFromCharacter(v.Position) > 100 then
+                            print("Plant Loop: Moving to plant location.") -- DEBUG
+                            game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame = getplace().Center_Point.CFrame
+                            task.wait(0.5) -- Đợi người chơi di chuyển
+                        end
+                        
+                        getgenv().ContentSet("Plant Fruits: " .. seedToPlant:GetAttribute(invobf["ItemName"]))
+                        game.ReplicatedStorage.GameEvents.Plant_RE:FireServer(unpack(arguments))
+                        print("Plant Loop: Plant_RE FireServer called for " .. seedToPlant:GetAttribute(invobf["ItemName"]) .. ".") -- DEBUG
+                        task.wait(0.5) -- Đợi sau khi gửi lệnh trồng cây
+
+                        -- Sau khi trồng một cây, có thể thoát để vòng lặp chính tìm hạt/chỗ mới
+                        break 
                     end
                 end
             end)
